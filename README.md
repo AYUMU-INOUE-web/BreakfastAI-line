@@ -16,18 +16,21 @@
 
 ```
 .
+├── api/
+│   └── index.py              # Vercel Serverless 関数エントリ
 ├── app/
 │   ├── admin.py              # 管理用 Flask Web アプリ + REST API
 │   ├── config.py             # 環境変数読み込み
-│   ├── database.py           # SQLAlchemy セッション管理
+│   ├── database.py           # SQLAlchemy(SQLite / Postgres)
 │   ├── line_notifier.py      # LINE Messaging API 連携
 │   ├── menu_generator.py     # 献立生成ロジック
 │   ├── models.py             # Ingredient / MenuHistory / MessageTemplate
-│   ├── scheduler.py          # APScheduler 毎朝 7:00 起動
+│   ├── scheduler.py          # APScheduler(ローカル/VPS 運用用)
 │   ├── seed_data.py          # サンプル食材
 │   └── template_renderer.py  # Jinja2 テンプレート描画
-├── tests/                  # pytest
-├── main.py                 # エントリーポイント (serve / send-now / seed)
+├── tests/                    # pytest
+├── main.py                   # ローカル/CI 用エントリ (serve/send-now/seed)
+├── vercel.json               # Vercel ルーティング + Cron 設定
 ├── requirements.txt
 └── .env.example
 ```
@@ -93,16 +96,92 @@ curl -X POST http://localhost:5000/api/ingredients \
 
 カテゴリは `main` / `protein` / `side` / `drink` の 4 種類。各カテゴリから 1 品ずつ選んで献立を組む。
 
+## Vercel にデプロイして友人と共有する
+
+固定 URL・編集永続化・Cron 配信込みで公開運用するための手順。
+
+### 1. Postgres を用意する(Neon 無料枠を推奨)
+
+1. [https://neon.tech](https://neon.tech) でアカウント作成(GitHub ログイン可)
+2. 新規プロジェクト作成 → 自動でデータベースが1個できる
+3. Dashboard の **Connection string** → *Pooled connection* をコピー
+   - 形式: `postgresql://user:password@ep-xxx-pooler.region.aws.neon.tech/dbname?sslmode=require`
+
+### 2. Vercel にプロジェクトを作る
+
+1. [https://vercel.com](https://vercel.com) にログイン(GitHub 連携)
+2. `Add New... → Project` → 本リポジトリを選択 → `Import`
+3. Framework Preset は **Other** のまま
+4. **Environment Variables** で以下を登録:
+
+| Name | Value | 必須 |
+| --- | --- | --- |
+| `DATABASE_URL` | Neon の接続文字列 | ✅ |
+| `LINE_CHANNEL_ACCESS_TOKEN` | LINE 発行のトークン | ✅ |
+| `LINE_USER_ID` | 配信先の userId / groupId | ✅ |
+| `CRON_SECRET` | 任意のランダム文字列(Cron エンドポイント保護) | ✅ |
+| `ADMIN_PASSWORD` | 管理 UI にかけたい Basic 認証パスワード | 任意 |
+| `TIMEZONE` | `Asia/Tokyo` | 任意 |
+| `AUTO_SEED` | `1`(初回にサンプル食材を自動投入) | 任意 |
+
+5. `Deploy` を押す → 数分で完了し `https://xxxxx.vercel.app` が発行される
+
+### 3. 初回アクセス
+
+- 発行された URL を開くと 3 タブの管理 UI が表示される
+- 初回のコールドスタートで自動的に:
+  - `CREATE TABLE IF NOT EXISTS` が走る
+  - デフォルトテンプレートが1件挿入される
+  - `AUTO_SEED=1` なら 19 品のサンプル食材が入る
+
+### 4. 友人と共有する
+
+- URL をグループLINEなどで共有
+- `ADMIN_PASSWORD` を設定している場合は、ID は任意 / パスワードは設定値
+- 編集内容は Postgres に即時保存され、全員に反映される
+
+### 5. 毎朝 7:00 JST 配信(Vercel Cron)
+
+`vercel.json` に組み込み済み。Hobby プランでも無料で稼働。
+
+```json
+"crons": [{ "path": "/api/cron/send", "schedule": "0 22 * * *" }]
+```
+
+- UTC 22:00 = JST 翌 07:00
+- Vercel Cron は自動で Bearer トークン(Vercel が設定する `CRON_SECRET`)を付けて叩く
+- 手動でも叩ける: `curl -H "Authorization: Bearer <CRON_SECRET>" https://xxxxx.vercel.app/api/cron/send`
+
+### 6. 動作確認チェックリスト
+
+- [ ] `/` → 管理 UI が表示される
+- [ ] 食材タブで追加 / 削除できる
+- [ ] テンプレートタブでプレビュー・保存できる
+- [ ] ダッシュボードの「いますぐ LINE 送信」で LINE に届く
+- [ ] 翌朝 7:00 に自動配信が来る(初日)
+
+### 7. GitHub Actions は不要になる
+
+Vercel Cron が定時配信を引き受けるので、以下のワークフローは無効化/削除して OK:
+
+- `.github/workflows/daily-breakfast.yml`
+- `.github/workflows/admin-ui.yml`(Tunnel 公開も不要)
+
+削除しない場合も、Vercel 側の Cron と **二重配信** になる点に注意してください。
+
 ## 環境変数
 
 | 変数 | 既定値 | 説明 |
 | --- | --- | --- |
 | `LINE_CHANNEL_ACCESS_TOKEN` | (必須) | LINE Messaging API のチャネルアクセストークン |
-| `LINE_USER_ID` | (必須) | 配信先ユーザー ID |
-| `DATABASE_URL` | `sqlite:///breakfast.db` | SQLAlchemy 接続文字列 |
-| `NOTIFY_HOUR` / `NOTIFY_MINUTE` | `7` / `0` | 配信時刻 |
+| `LINE_USER_ID` | (必須) | 配信先ユーザー ID または グループ ID |
+| `DATABASE_URL` | `sqlite:///breakfast.db` | SQLAlchemy 接続文字列(Vercel では Postgres 必須) |
+| `NOTIFY_HOUR` / `NOTIFY_MINUTE` | `7` / `0` | 配信時刻(ローカル APScheduler 用) |
 | `TIMEZONE` | `Asia/Tokyo` | スケジューラの TZ |
 | `ADMIN_HOST` / `ADMIN_PORT` | `0.0.0.0` / `5000` | 管理 UI 待ち受け |
+| `ADMIN_PASSWORD` | (空) | Basic 認証パスワード(空なら認証なし) |
+| `CRON_SECRET` | (空) | `/api/cron/send` エンドポイントの Bearer 認証 |
+| `AUTO_SEED` | `1` | 空DBに対し初回のみサンプル食材を投入 |
 
 ## テスト
 

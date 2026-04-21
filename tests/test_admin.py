@@ -9,6 +9,7 @@ def client(monkeypatch):
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp.name}")
+    monkeypatch.setenv("AUTO_SEED", "0")
     # 環境変数の反映のためモジュール再読み込み
     import importlib
     from app import config, database, admin
@@ -103,3 +104,58 @@ def test_template_reset_restores_default(client):
     assert res.status_code == 200
     body = client.get("/api/template").get_json()["body"]
     assert "きょうの朝ごはん" in body
+
+
+@pytest.fixture
+def client_with_cron_secret(monkeypatch):
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp.name}")
+    monkeypatch.setenv("AUTO_SEED", "1")
+    monkeypatch.setenv("CRON_SECRET", "s3cret")
+    import importlib
+    from app import config, database, admin
+    importlib.reload(config)
+    importlib.reload(database)
+    importlib.reload(admin)
+    app = admin.create_app()
+    app.testing = True
+    with app.test_client() as c:
+        yield c
+    os.unlink(tmp.name)
+
+
+def test_cron_rejects_without_bearer(client_with_cron_secret):
+    res = client_with_cron_secret.get("/api/cron/send")
+    assert res.status_code == 401
+
+
+def test_cron_accepts_correct_bearer(client_with_cron_secret):
+    res = client_with_cron_secret.get(
+        "/api/cron/send", headers={"Authorization": "Bearer s3cret"}
+    )
+    assert res.status_code == 200
+    assert res.get_json()["sent"] is True
+
+
+def test_basic_auth_required_when_password_set(monkeypatch):
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp.name}")
+    monkeypatch.setenv("AUTO_SEED", "0")
+    monkeypatch.setenv("ADMIN_PASSWORD", "letmein")
+    import importlib
+    from app import config, database, admin
+    importlib.reload(config)
+    importlib.reload(database)
+    importlib.reload(admin)
+    app = admin.create_app()
+    app.testing = True
+    with app.test_client() as c:
+        assert c.get("/api/ingredients").status_code == 401
+        import base64
+        creds = base64.b64encode(b"x:letmein").decode()
+        assert c.get(
+            "/api/ingredients", headers={"Authorization": f"Basic {creds}"}
+        ).status_code == 200
+    os.unlink(tmp.name)

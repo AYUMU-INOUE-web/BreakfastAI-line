@@ -19,12 +19,16 @@ REST API:
 """
 from __future__ import annotations
 
-from flask import Flask, jsonify, render_template_string, request
+import hmac
 
+from flask import Flask, Response, jsonify, render_template_string, request
+
+from app.config import ADMIN_PASSWORD, AUTO_SEED, CRON_SECRET
 from app.database import init_db, session_scope
 from app.line_notifier import send_menu
 from app.menu_generator import generate_menu, save_history
 from app.models import Ingredient, MessageTemplate
+from app.seed_data import seed_default_ingredients
 from app.template_renderer import (
     AVAILABLE_VARIABLES,
     DEFAULT_TEMPLATE_BODY,
@@ -284,11 +288,42 @@ def _validate_payload(payload: dict) -> tuple[dict, str | None]:
     return cleaned, None
 
 
-def create_app() -> Flask:
+def _bootstrap_db() -> None:
+    """初回起動(or コールドスタート)時の自動初期化。
+
+    - テーブル作成
+    - デフォルトテンプレート投入
+    - AUTO_SEED=1 かつ食材 0 件なら seed_default_ingredients を実行
+    全て冪等。既に入っているデータは上書きしない。
+    """
     init_db()
     with session_scope() as s:
         ensure_default_template(s)
+    if AUTO_SEED:
+        with session_scope() as s:
+            if s.query(Ingredient).count() == 0:
+                seed_default_ingredients()
+
+
+def create_app() -> Flask:
+    _bootstrap_db()
     app = Flask(__name__)
+
+    @app.before_request
+    def _require_basic_auth():
+        if not ADMIN_PASSWORD:
+            return None
+        # Cron エンドポイントは CRON_SECRET で別途認証
+        if request.path.startswith("/api/cron/"):
+            return None
+        auth = request.authorization
+        if auth and auth.password and hmac.compare_digest(auth.password, ADMIN_PASSWORD):
+            return None
+        return Response(
+            "認証が必要です",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Breakfast admin"'},
+        )
 
     @app.get("/")
     def index():
@@ -416,5 +451,25 @@ def create_app() -> Flask:
         payload = menu.to_payload()
         payload["rendered"] = render(body, menu)
         return jsonify(payload)
+
+    # ---- Vercel Cron からの定時配信 ----
+    @app.route("/api/cron/send", methods=["GET", "POST"])
+    def cron_send():
+        if CRON_SECRET:
+            auth = request.headers.get("Authorization", "")
+            expected = f"Bearer {CRON_SECRET}"
+            if not hmac.compare_digest(auth, expected):
+                return "unauthorized", 401
+        with session_scope() as s:
+            menu = generate_menu(s)
+            save_history(s, menu)
+            body = get_active_body(s)
+        send_menu(menu, template_body=body)
+        return jsonify({
+            "sent": True,
+            "menu_name": menu.menu_name,
+            "total_calories": menu.total_calories,
+            "is_fallback": menu.is_fallback,
+        })
 
     return app

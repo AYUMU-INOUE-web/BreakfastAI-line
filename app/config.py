@@ -15,6 +15,13 @@ TIMEZONE = os.getenv("TIMEZONE", "Asia/Tokyo")
 ADMIN_HOST = os.getenv("ADMIN_HOST", "0.0.0.0")
 ADMIN_PORT = int(os.getenv("ADMIN_PORT", "5000"))
 
+# 任意の Basic 認証(共有運用時に推奨)。空なら認証なし
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+# Vercel Cron の共有秘密。設定した場合は Authorization ヘッダで検証
+CRON_SECRET = os.getenv("CRON_SECRET", "")
+# 空のDBに対してサンプル食材を自動投入するか(Vercel初回デプロイ向け)
+AUTO_SEED = os.getenv("AUTO_SEED", "1") == "1"
+
 CALORIE_TARGET = 700
 CALORIE_MIN = 650
 CALORIE_MAX = 750
