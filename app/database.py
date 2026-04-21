@@ -1,11 +1,14 @@
 from contextlib import contextmanager
+import logging
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.config import DATABASE_URL
 from app.models import Base
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_url(url: str) -> str:
@@ -27,8 +30,26 @@ _engine = create_engine(_url, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False, future=True)
 
 
+def _apply_simple_migrations() -> None:
+    """Alembic を使わない軽量な列追加マイグレーション。冪等。"""
+    try:
+        inspector = inspect(_engine)
+        if "menu_history" not in inspector.get_table_names():
+            return
+        cols = {c["name"] for c in inspector.get_columns("menu_history")}
+        if "profile_name" not in cols:
+            with _engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE menu_history ADD COLUMN profile_name VARCHAR(64)"
+                ))
+            logger.info("Added profile_name column to menu_history")
+    except Exception:
+        logger.exception("Simple migration failed; continuing")
+
+
 def init_db() -> None:
     Base.metadata.create_all(_engine)
+    _apply_simple_migrations()
 
 
 @contextmanager

@@ -43,6 +43,7 @@ class MenuHistory(Base):
 
     id = Column(Integer, primary_key=True)
     served_on = Column(Date, nullable=False, index=True)
+    profile_name = Column(String(64), nullable=True, index=True)
     menu_name = Column(String(128), nullable=False)
     items_json = Column(Text, nullable=False)  # [{ingredient_id, name, portion, unit, calories}, ...]
     total_calories = Column(Float, nullable=False)

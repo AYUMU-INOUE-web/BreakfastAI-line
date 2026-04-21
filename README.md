@@ -5,10 +5,10 @@
 ## 特徴
 
 - 食材ごとにカロリー・単位・分量範囲を管理 (CRUD)
-- 許容 **650〜750kcal** のランダム献立を自動生成
-- 直近 **3日以内と同じ献立は回避**(飽きずに食べられる)
-- 生成に失敗した場合は **固定の代替メニュー** を配信
-- **配信テンプレートを Web UI から編集可能**(Jinja2)
+- **2 人分の献立を同時生成**(700kcal たっぷり / 300kcal ひかえめ)
+- プロファイルごとに直近 **3日以内と同じ献立は回避**
+- 生成に失敗した場合はプロファイル別の **固定代替メニュー** を配信
+- **配信テンプレートを Web UI から編集可能**(Jinja2, `menus` で2人分をループ)
 - 食材の追加 / 編集 / 削除を Web UI から操作可能
 - 管理画面 (Flask) からプレビュー / 即時送信が可能
 
@@ -213,27 +213,40 @@ Vercel Cron が定時配信を引き受けるので、以下のワークフロ�
 
 | 変数 | 説明 |
 | --- | --- |
-| `menu_name` | 献立の名前 |
-| `total_calories` | 合計カロリー(小数) |
-| `total_calories_int` | 合計カロリー(整数丸め) |
-| `is_fallback` | 代替メニューかどうか |
-| `items` | 食材リスト。各要素は `name / portion / portion_display / unit / calories / calories_int` |
 | `date` | 配信日 `YYYY-MM-DD` |
+| `menus` | 献立のリスト(既定は 700kcal / 300kcal の 2 要素) |
+| `menus[i].profile_name` | プロファイル名(例: `700kcal`) |
+| `menus[i].menu_name` | 献立の名前 |
+| `menus[i].total_calories_int` | 合計カロリー(整数) |
+| `menus[i].is_fallback` | 代替メニューかどうか |
+| `menus[i].items` | 食材リスト。各要素は `name / portion / portion_display / unit / calories / calories_int` |
 
 既定テンプレート(`app/template_renderer.py` の `DEFAULT_TEMPLATE_BODY`):
 
 ```
-🍳 きょうの朝ごはん{% if is_fallback %}(代替メニュー){% endif %}
-《{{ menu_name }}》
-合計カロリー: {{ total_calories_int }} kcal
-─────────────
-{% for item in items -%}
+🍳 きょうの朝ごはん ({{ date }})
+{% for menu in menus %}
+━━━━━━━━━━━━━
+【{{ menu.profile_name }}】{% if menu.is_fallback %} (代替){% endif %}
+《{{ menu.menu_name }}》
+合計 {{ menu.total_calories_int }} kcal
+{% for item in menu.items -%}
 ・{{ item.name }}: {{ item.portion_display }}{{ item.unit }} ({{ item.calories_int }} kcal)
 {% endfor %}
+{%- endfor %}
 今日も一日がんばろう!
 ```
 
 ## 献立生成アルゴリズム(概要)
+
+既定で 2 プロファイル分を生成する(`app/menu_generator.py::DEFAULT_PROFILES`)。
+
+| プロファイル | 目標 | 許容範囲 | 構成 |
+| --- | --- | --- | --- |
+| 700kcal | 700kcal | 650〜750 | 主食 + たんぱく + 副菜 + 飲み物 |
+| 300kcal | 300kcal | 250〜350 | 主食 + たんぱく + 飲み物 |
+
+各プロファイルごとに:
 
 1. 有効な食材をカテゴリ別に分類
 2. 必須カテゴリがすべて揃わなければ代替メニューを返す
@@ -241,6 +254,8 @@ Vercel Cron が定時配信を引き受けるので、以下のワークフロ�
    - 各カテゴリから 1 品ずつランダム選択
    - `min_portion`〜`max_portion` を 5 段階に量子化して分量を決定
    - 直近 3 日と同じ食材+分量の組み合わせはスキップ
-   - 合計 650〜750kcal に収まれば採用
-4. 範囲内で見つからなかった場合、700kcal ±15% に最も近い候補で妥協
-5. それも無ければ代替の固定メニューを返す
+   - そのプロファイルの許容範囲に収まれば採用
+4. 範囲内で見つからなかった場合、ターゲット ±15% に最も近い候補で妥協
+5. それも無ければプロファイル別の代替固定メニューを返す
+
+2 プロファイル間で同一献立にならないよう、先に採用された献立のシグネチャを除外候補として渡す。

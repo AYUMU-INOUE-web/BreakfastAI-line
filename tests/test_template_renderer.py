@@ -1,54 +1,62 @@
 from app.menu_generator import GeneratedMenu, MenuItem
+from app.models import MessageTemplate
 from app.template_renderer import (
     DEFAULT_TEMPLATE_BODY,
     ensure_default_template,
     get_active_body,
     render,
-    sample_menu,
+    sample_menus,
 )
-from app.models import MessageTemplate
 
 
-def _menu():
-    return GeneratedMenu(
-        menu_name="テスト献立",
-        items=[
-            MenuItem(None, "食パン", 1, "枚", 160),
-            MenuItem(None, "目玉焼き", 1, "個", 110),
-        ],
-        total_calories=270,
-        is_fallback=False,
-    )
+def _two_menus():
+    return [
+        GeneratedMenu(
+            profile_name="700kcal",
+            menu_name="テスト700",
+            items=[
+                MenuItem(None, "食パン", 1, "枚", 160),
+                MenuItem(None, "目玉焼き", 1, "個", 110),
+            ],
+            total_calories=270,
+        ),
+        GeneratedMenu(
+            profile_name="300kcal",
+            menu_name="テスト300",
+            items=[MenuItem(None, "ヨーグルト", 100, "g", 62)],
+            total_calories=62,
+        ),
+    ]
 
 
-def test_default_template_renders_all_items():
-    text = render(DEFAULT_TEMPLATE_BODY, _menu())
-    assert "テスト献立" in text
+def test_default_template_renders_each_profile_block():
+    text = render(DEFAULT_TEMPLATE_BODY, _two_menus())
+    assert "700kcal" in text
+    assert "300kcal" in text
+    assert "テスト700" in text
+    assert "テスト300" in text
     assert "食パン: 1枚" in text
-    assert "目玉焼き: 1個" in text
     assert "270 kcal" in text
-    assert "代替メニュー" not in text
+    assert "62 kcal" in text
 
 
-def test_fallback_marker_shown_for_fallback_menu():
-    menu = _menu()
-    menu.is_fallback = True
-    text = render(DEFAULT_TEMPLATE_BODY, menu)
-    assert "代替メニュー" in text
+def test_fallback_marker_shown_per_menu():
+    menus = _two_menus()
+    menus[1].is_fallback = True
+    text = render(DEFAULT_TEMPLATE_BODY, menus)
+    assert "(代替)" in text
 
 
 def test_broken_template_falls_back_to_default():
     broken = "{{ unknown_func(  "  # 構文エラー
-    text = render(broken, _menu())
-    # 既定テンプレが描画されていること
+    text = render(broken, _two_menus())
     assert "きょうの朝ごはん" in text
     assert "食パン: 1枚" in text
 
 
 def test_sandbox_blocks_attribute_access_on_internals():
     malicious = "{{ ''.__class__.__mro__ }}"
-    text = render(malicious, _menu())
-    # 既定テンプレに fall back されること
+    text = render(malicious, _two_menus())
     assert "きょうの朝ごはん" in text
 
 
@@ -67,6 +75,8 @@ def test_ensure_default_template_seeds_once(session):
     assert rows[0].body == DEFAULT_TEMPLATE_BODY
 
 
-def test_sample_menu_is_renderable():
-    text = render(DEFAULT_TEMPLATE_BODY, sample_menu())
+def test_sample_menus_are_renderable():
+    text = render(DEFAULT_TEMPLATE_BODY, sample_menus())
     assert "食パン" in text
+    assert "700kcal" in text
+    assert "300kcal" in text

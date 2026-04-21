@@ -1,10 +1,8 @@
-"""LINE Messaging API への配信。
-
-文面の整形はユーザーが編集できるテンプレート (Jinja2) に委譲する。
-"""
+"""LINE Messaging API への配信(2人分対応)。"""
 from __future__ import annotations
 
 import logging
+from typing import Sequence
 
 from linebot.v3.messaging import (
     ApiClient,
@@ -21,13 +19,13 @@ from app.template_renderer import DEFAULT_TEMPLATE_BODY, render
 logger = logging.getLogger(__name__)
 
 
-def format_menu(menu: GeneratedMenu, template_body: str | None = None) -> str:
+def format_breakfast(menus: Sequence[GeneratedMenu], template_body: str | None = None) -> str:
     body = template_body if template_body is not None else DEFAULT_TEMPLATE_BODY
-    return render(body, menu)
+    return render(body, menus)
 
 
-def send_menu(menu: GeneratedMenu, template_body: str | None = None) -> None:
-    text = format_menu(menu, template_body)
+def send_breakfast(menus: Sequence[GeneratedMenu], template_body: str | None = None) -> None:
+    text = format_breakfast(menus, template_body)
     if not LINE_CHANNEL_ACCESS_TOKEN or not LINE_USER_ID:
         logger.warning("LINE credentials are not configured; skipping push.")
         logger.info("Would have sent:\n%s", text)

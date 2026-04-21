@@ -66,7 +66,7 @@ def test_template_get_returns_default_on_first_access(client):
     assert res.status_code == 200
     data = res.get_json()
     assert "きょうの朝ごはん" in data["body"]
-    assert any(v["name"] == "items" for v in data["variables"])
+    assert any(v["name"] == "menus" for v in data["variables"])
 
 
 def test_template_update_and_fetch(client):
@@ -92,7 +92,7 @@ def test_template_update_rejects_empty_body(client):
 def test_template_preview_uses_supplied_body(client):
     res = client.post(
         "/api/template/preview",
-        json={"body": "合計 {{ total_calories_int }}kcal"},
+        json={"body": "合計 {{ menus[0].total_calories_int }}kcal"},
     )
     assert res.status_code == 200
     assert "合計 494kcal" == res.get_json()["preview"]

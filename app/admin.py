@@ -25,8 +25,8 @@ from flask import Flask, Response, jsonify, render_template_string, request
 
 from app.config import ADMIN_PASSWORD, AUTO_SEED, CRON_SECRET
 from app.database import init_db, session_scope
-from app.line_notifier import send_menu
-from app.menu_generator import generate_menu, save_history
+from app.line_notifier import send_breakfast
+from app.menu_generator import generate_breakfast, save_history
 from app.models import Ingredient, MessageTemplate
 from app.seed_data import seed_default_ingredients
 from app.template_renderer import (
@@ -36,7 +36,7 @@ from app.template_renderer import (
     ensure_default_template,
     get_active_body,
     render,
-    sample_menu,
+    sample_menus,
     strict_render,
 )
 
@@ -152,7 +152,7 @@ INDEX_HTML = """
 <section id=\"sec-template\">
   <div class=\"card\">
     <h2>配信テンプレートの編集</h2>
-    <p class=\"muted\">Jinja2 構文で編集できます。保存すると次回の配信から反映されます。</p>
+    <p class=\"muted\">Jinja2 構文で編集できます。<code>menus</code> は 700kcal / 300kcal の 2 要素配列です。保存すると次回の配信から反映されます。</p>
     <textarea id=\"tmplBody\"></textarea>
     <div class=\"actions\">
       <button class=\"primary\" onclick=\"saveTemplate()\">保存</button>
@@ -289,7 +289,7 @@ async function resetTemplate(){
 async function preview(){
   const res = await fetch('/api/preview', {method:'POST'});
   const data = await res.json();
-  document.getElementById('dashOut').textContent = data.rendered + '\\n\\n― 生成内容 ―\\n' + JSON.stringify({menu_name:data.menu_name, total_calories:data.total_calories, is_fallback:data.is_fallback, items:data.items}, null, 2);
+  document.getElementById('dashOut').textContent = data.rendered + '\\n\\n― 生成内容 ―\\n' + JSON.stringify(data.menus, null, 2);
 }
 async function sendNow(){
   if(!confirm('LINEへ即時送信します。よろしいですか?')) return;
@@ -438,7 +438,7 @@ def create_app() -> Flask:
             return "body must be a non-empty string", 400
         # 保存前に構文チェック(エラーは400で返して編集中の事故を防ぐ)
         try:
-            strict_render(body, sample_menu())
+            strict_render(body, sample_menus())
         except Exception as exc:  # noqa: BLE001
             return f"template render failed: {exc}", 400
         with session_scope() as s:
@@ -474,7 +474,7 @@ def create_app() -> Flask:
         payload = request.get_json(force=True) or {}
         body = payload.get("body") or DEFAULT_TEMPLATE_BODY
         try:
-            rendered = strict_render(body, sample_menu())
+            rendered = strict_render(body, sample_menus())
         except Exception as exc:  # noqa: BLE001
             return f"render failed: {exc}", 400
         return jsonify({"preview": rendered})
@@ -483,22 +483,24 @@ def create_app() -> Flask:
     @app.post("/api/preview")
     def preview_menu():
         with session_scope() as s:
-            menu = generate_menu(s)
+            menus = generate_breakfast(s)
             body = get_active_body(s)
-        payload = menu.to_payload()
-        payload["rendered"] = render(body, menu)
-        return jsonify(payload)
+        return jsonify({
+            "menus": [m.to_payload() for m in menus],
+            "rendered": render(body, menus),
+        })
 
     @app.post("/api/send-now")
     def send_now():
         with session_scope() as s:
-            menu = generate_menu(s)
-            save_history(s, menu)
+            menus = generate_breakfast(s)
+            save_history(s, menus)
             body = get_active_body(s)
-        send_menu(menu, template_body=body)
-        payload = menu.to_payload()
-        payload["rendered"] = render(body, menu)
-        return jsonify(payload)
+        send_breakfast(menus, template_body=body)
+        return jsonify({
+            "menus": [m.to_payload() for m in menus],
+            "rendered": render(body, menus),
+        })
 
     # ---- Vercel Cron からの定時配信 ----
     @app.route("/api/cron/send", methods=["GET", "POST"])
@@ -509,15 +511,18 @@ def create_app() -> Flask:
             if not hmac.compare_digest(auth, expected):
                 return "unauthorized", 401
         with session_scope() as s:
-            menu = generate_menu(s)
-            save_history(s, menu)
+            menus = generate_breakfast(s)
+            save_history(s, menus)
             body = get_active_body(s)
-        send_menu(menu, template_body=body)
+        send_breakfast(menus, template_body=body)
         return jsonify({
             "sent": True,
-            "menu_name": menu.menu_name,
-            "total_calories": menu.total_calories,
-            "is_fallback": menu.is_fallback,
+            "menus": [{
+                "profile_name": m.profile_name,
+                "menu_name": m.menu_name,
+                "total_calories": m.total_calories,
+                "is_fallback": m.is_fallback,
+            } for m in menus],
         })
 
     return app
