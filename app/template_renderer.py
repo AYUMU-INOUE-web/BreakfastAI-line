@@ -29,6 +29,9 @@ DEFAULT_TEMPLATE_BODY = """🍳 きょうの朝ごはん ({{ date }})
 合計 {{ menu.total_calories_int }} kcal
 {% for item in menu.items -%}
 ・{{ item.name }}: {{ item.portion_display }}{{ item.unit }} ({{ item.calories_int }} kcal)
+{%- if item.ingredients_used %}
+  └ 材料: {% for u in item.ingredients_used %}{{ u.name }} {{ u.portion_display }}{{ u.unit }}{% if not loop.last %}、{% endif %}{% endfor %}
+{%- endif %}
 {% endfor %}
 {%- endfor %}
 今日も一日がんばろう!"""
@@ -40,7 +43,9 @@ AVAILABLE_VARIABLES = [
     ("menus[i].menu_name", "献立の名前"),
     ("menus[i].total_calories_int", "合計カロリー(整数)"),
     ("menus[i].is_fallback", "代替メニューかどうか"),
-    ("menus[i].items", "食材のリスト。name / portion / portion_display / unit / calories / calories_int"),
+    ("menus[i].items", "料理のリスト。name / portion / portion_display / unit / calories / calories_int / description / ingredients_used"),
+    ("menus[i].items[j].ingredients_used", "AI 生成時のみ。料理に使う素材リスト(name / portion / portion_display / unit)"),
+    ("menus[i].items[j].description", "AI 生成時のみ。作り方メモ"),
 ]
 
 _env = SandboxedEnvironment(autoescape=False, trim_blocks=False, lstrip_blocks=False)
@@ -51,6 +56,16 @@ def _portion_display(value: float) -> str:
 
 
 def _item_ns(item: MenuItem) -> SimpleNamespace:
+    used = [
+        SimpleNamespace(
+            name=str(u.get("name", "")),
+            portion=u.get("portion", 0),
+            portion_display=_portion_display(float(u.get("portion", 0) or 0)),
+            unit=str(u.get("unit", "")),
+        )
+        for u in (item.ingredients_used or [])
+        if isinstance(u, dict)
+    ]
     return SimpleNamespace(
         name=item.name,
         portion=item.portion,
@@ -58,6 +73,8 @@ def _item_ns(item: MenuItem) -> SimpleNamespace:
         unit=item.unit,
         calories=item.calories,
         calories_int=round(item.calories),
+        description=item.description or "",
+        ingredients_used=used,
     )
 
 

@@ -1,119 +1,194 @@
-import os
 import tempfile
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from app.menu_generator import DEFAULT_PROFILES
+from app.models import Ingredient
 
-def _fake_tool_response(dishes: list[dict]):
-    block = SimpleNamespace(type="tool_use", name="submit_dishes", input={"dishes": dishes}, id="toolu_1")
+
+def _tool_response(menu_name: str, dishes: list[dict]):
+    block = SimpleNamespace(
+        type="tool_use",
+        name="submit_menu",
+        input={"menu_name": menu_name, "dishes": dishes},
+        id="toolu_1",
+    )
     return SimpleNamespace(content=[block], stop_reason="tool_use")
 
 
-def test_suggester_returns_validated_dishes(monkeypatch):
+@pytest.fixture
+def ai_session(session, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    # 素材を数種類投入
+    session.add_all([
+        Ingredient(name="卵", category="protein", unit="個", calories_per_unit=80,
+                   default_portion=1, min_portion=1, max_portion=3, active=True),
+        Ingredient(name="しゃけ", category="protein", unit="切れ", calories_per_unit=150,
+                   default_portion=1, min_portion=1, max_portion=2, active=True),
+        Ingredient(name="梅干し", category="side", unit="個", calories_per_unit=5,
+                   default_portion=1, min_portion=1, max_portion=3, active=True),
+        Ingredient(name="ごはん", category="main", unit="g", calories_per_unit=1.68,
+                   default_portion=150, min_portion=100, max_portion=200, active=True),
+        Ingredient(name="緑茶", category="drink", unit="ml", calories_per_unit=0.02,
+                   default_portion=200, min_portion=150, max_portion=250, active=True),
+        Ingredient(name="牛乳", category="drink", unit="ml", calories_per_unit=0.67,
+                   default_portion=200, min_portion=150, max_portion=250, active=True),
+    ])
+    session.commit()
+
+    # config モジュールを再読み込みして ANTHROPIC_API_KEY を反映
     import importlib
     from app import config, ai_suggester
     importlib.reload(config)
     importlib.reload(ai_suggester)
+    return session, ai_suggester
+
+
+def test_generate_ai_menu_returns_menu_with_dishes(ai_session):
+    session, ai_suggester = ai_session
+    profile = DEFAULT_PROFILES[0]
 
     dishes = [
-        {
-            "name": "ゆで卵",
-            "category": "protein",
-            "unit": "個",
-            "calories_per_unit": 90,
-            "default_portion": 1,
-            "min_portion": 1,
-            "max_portion": 2,
-            "uses_ingredients": ["卵"],
-            "description": "沸騰したお湯で8分茹でる。",
-        },
         {
             "name": "しゃけ茶漬け",
-            "category": "main",
-            "unit": "杯",
-            "calories_per_unit": 320,
-            "default_portion": 1,
-            "min_portion": 1,
-            "max_portion": 1,
-            "uses_ingredients": ["しゃけ", "梅干し", "ごはん"],
-            "description": "ごはんに焼き鮭と梅干しを乗せ熱いお茶をかける。",
+            "portion": 1, "unit": "杯", "calories": 420,
+            "ingredients_used": [
+                {"name": "しゃけ", "portion": 1, "unit": "切れ"},
+                {"name": "梅干し", "portion": 1, "unit": "個"},
+                {"name": "ごはん", "portion": 150, "unit": "g"},
+                {"name": "緑茶", "portion": 200, "unit": "ml"},
+            ],
+            "description": "ごはんに焼き鮭と梅干しを乗せ熱い緑茶をかける",
+        },
+        {
+            "name": "ゆで卵",
+            "portion": 1, "unit": "個", "calories": 80,
+            "ingredients_used": [{"name": "卵", "portion": 1, "unit": "個"}],
+            "description": "沸騰したお湯で 8 分茹でる",
+        },
+        {
+            "name": "牛乳",
+            "portion": 200, "unit": "ml", "calories": 134,
+            "ingredients_used": [{"name": "牛乳", "portion": 200, "unit": "ml"}],
+            "description": "温めても冷やしても",
         },
     ]
 
     class FakeMessages:
         def create(self, **kwargs):
-            # tool 強制呼び出しが指示されていること
-            assert kwargs["tool_choice"] == {"type": "tool", "name": "submit_dishes"}
-            assert kwargs["tools"][0]["name"] == "submit_dishes"
-            assert kwargs["model"].startswith("claude-")
-            return _fake_tool_response(dishes)
+            assert kwargs["tool_choice"] == {"type": "tool", "name": "submit_menu"}
+            assert kwargs["tools"][0]["name"] == "submit_menu"
+            assert "卵" in kwargs["messages"][0]["content"]
+            return _tool_response("しゃけ茶漬け中心の和朝食", dishes)
 
     class FakeClient:
         def __init__(self, api_key=None):
             self.messages = FakeMessages()
 
     with patch.object(ai_suggester.anthropic, "Anthropic", FakeClient):
-        result = ai_suggester.suggest_dishes(["卵", "しゃけ", "梅干し", "ごはん"], n=2)
+        menu = ai_suggester.generate_ai_menu(session, profile, exclude_signatures=set())
 
-    assert len(result) == 2
-    assert result[0]["name"] == "ゆで卵"
-    assert result[1]["category"] == "main"
-
-
-def test_suggester_rejects_invalid_category(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
-    import importlib
-    from app import config, ai_suggester
-    importlib.reload(config)
-    importlib.reload(ai_suggester)
-
-    dishes = [
-        {
-            "name": "変な料理",
-            "category": "dessert",
-            "unit": "皿", "calories_per_unit": 100,
-            "default_portion": 1, "min_portion": 1, "max_portion": 1,
-            "uses_ingredients": [], "description": "",
-        },
-        {
-            "name": "ちゃんとした料理",
-            "category": "main",
-            "unit": "皿", "calories_per_unit": 200,
-            "default_portion": 1, "min_portion": 1, "max_portion": 1,
-            "uses_ingredients": [], "description": "",
-        },
-    ]
-
-    class FakeMessages:
-        def create(self, **kwargs):
-            return _fake_tool_response(dishes)
-
-    class FakeClient:
-        def __init__(self, api_key=None):
-            self.messages = FakeMessages()
-
-    with patch.object(ai_suggester.anthropic, "Anthropic", FakeClient):
-        result = ai_suggester.suggest_dishes(["x"], n=2)
-
-    assert len(result) == 1
-    assert result[0]["name"] == "ちゃんとした料理"
+    assert menu is not None
+    assert menu.profile_name == "700kcal"
+    assert menu.menu_name == "しゃけ茶漬け中心の和朝食"
+    assert [i.name for i in menu.items] == ["しゃけ茶漬け", "ゆで卵", "牛乳"]
+    assert menu.total_calories == 634
+    # 使用素材が各料理に紐付いている
+    assert menu.items[0].ingredients_used[0]["name"] == "しゃけ"
+    assert "緑茶" in [u["name"] for u in menu.items[0].ingredients_used]
+    assert menu.items[1].description.startswith("沸騰")
 
 
-def test_suggester_without_api_key_raises(monkeypatch):
+def test_generate_ai_menu_returns_none_without_api_key(session, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     import importlib
     from app import config, ai_suggester
     importlib.reload(config)
     importlib.reload(ai_suggester)
 
-    with pytest.raises(ai_suggester.AISuggesterUnavailableError):
-        ai_suggester.suggest_dishes(["卵"], n=1)
+    assert ai_suggester.generate_ai_menu(session, DEFAULT_PROFILES[0]) is None
 
 
-def test_admin_api_status_and_suggest(monkeypatch):
+def test_generate_ai_menu_returns_none_without_ingredients(monkeypatch):
+    import importlib
+    from app import config, ai_suggester
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    importlib.reload(config)
+    importlib.reload(ai_suggester)
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.models import Base
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine, future=True)()
+
+    assert ai_suggester.generate_ai_menu(s, DEFAULT_PROFILES[0]) is None
+
+
+def test_generate_ai_menu_handles_api_error(ai_session):
+    session, ai_suggester = ai_session
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            raise RuntimeError("network down")
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            self.messages = FakeMessages()
+
+    with patch.object(ai_suggester.anthropic, "Anthropic", FakeClient):
+        menu = ai_suggester.generate_ai_menu(session, DEFAULT_PROFILES[0])
+    assert menu is None
+
+
+def test_generate_breakfast_uses_ai_then_falls_back(populated_session, monkeypatch):
+    """AI が成功したら AI 結果、失敗したらルールベース、を両方カバーする。"""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    import importlib
+    from app import config, ai_suggester, menu_generator
+    importlib.reload(config)
+    importlib.reload(ai_suggester)
+    importlib.reload(menu_generator)
+
+    dishes = [
+        {"name": "しゃけ茶漬け", "portion": 1, "unit": "杯", "calories": 500,
+         "ingredients_used": [], "description": ""},
+        {"name": "ヨーグルト", "portion": 100, "unit": "g", "calories": 200,
+         "ingredients_used": [], "description": ""},
+    ]
+
+    call_count = {"n": 0}
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            call_count["n"] += 1
+            # 1 回目(700kcal)は成功、2 回目(300kcal)は失敗
+            if call_count["n"] == 1:
+                return _tool_response("AI 献立", dishes)
+            raise RuntimeError("down")
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            self.messages = FakeMessages()
+
+    with patch.object(ai_suggester.anthropic, "Anthropic", FakeClient):
+        menus = menu_generator.generate_breakfast(populated_session)
+
+    assert len(menus) == 2
+    # 700kcal は AI 結果(menu_name が "AI 献立", dish 単位)
+    assert menus[0].profile_name == "700kcal"
+    assert menus[0].menu_name == "AI 献立"
+    assert menus[0].items[0].name == "しゃけ茶漬け"
+    # 300kcal は AI 失敗 → ルールベース(カテゴリ由来の名前になる)
+    assert menus[1].profile_name == "300kcal"
+    assert menus[1].menu_name != "AI 献立"
+
+
+def test_admin_ai_status_endpoint(monkeypatch):
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp.name}")
@@ -127,30 +202,11 @@ def test_admin_api_status_and_suggest(monkeypatch):
     importlib.reload(ai_suggester)
     importlib.reload(admin)
 
-    dishes = [{
-        "name": "目玉焼き",
-        "category": "protein",
-        "unit": "個", "calories_per_unit": 110,
-        "default_portion": 1, "min_portion": 1, "max_portion": 2,
-        "uses_ingredients": ["卵"],
-        "description": "フライパンで卵を焼く。",
-    }]
-
-    class FakeMessages:
-        def create(self, **kwargs):
-            return _fake_tool_response(dishes)
-
-    class FakeClient:
-        def __init__(self, api_key=None):
-            self.messages = FakeMessages()
-
-    with patch.object(ai_suggester.anthropic, "Anthropic", FakeClient):
-        app = admin.create_app()
-        app.testing = True
-        with app.test_client() as c:
-            assert c.get("/api/ai/status").get_json() == {"available": True}
-            res = c.post("/api/ai/suggest", json={"ingredients": ["卵"], "n": 1})
-            assert res.status_code == 200
-            assert res.get_json()["dishes"][0]["name"] == "目玉焼き"
+    app = admin.create_app()
+    app.testing = True
+    with app.test_client() as c:
+        assert c.get("/api/ai/status").get_json() == {"available": True}
+        # 旧 /api/ai/suggest は廃止 → 404
+        assert c.post("/api/ai/suggest", json={"ingredients": []}).status_code == 404
 
     os.unlink(tmp.name)

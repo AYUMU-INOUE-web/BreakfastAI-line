@@ -67,6 +67,9 @@ class MenuItem:
     portion: float
     unit: str
     calories: float
+    # AI が組み立てた料理のときだけ値が入る(ルールベース時は空)
+    ingredients_used: list[dict] = field(default_factory=list)
+    description: str = ""
 
 
 @dataclass
@@ -210,14 +213,25 @@ def generate_breakfast(
 ) -> list[GeneratedMenu]:
     """全プロファイル分の献立をまとめて返す。
 
-    同日の他プロファイルと「食材+分量」シグネチャが完全一致しないよう互いに避ける。
+    まず AI に素材から料理を組み立てさせる。AI が使えない / 失敗した場合は
+    ルールベース生成にフォールバックする。同日の他プロファイルとシグネチャが
+    完全一致しないよう互いに避ける。
     """
+    # 遅延 import で循環依存を避ける(ai_suggester も menu_generator を import する)
+    from app.ai_suggester import generate_ai_menu
+
     produced: list[GeneratedMenu] = []
     used_signatures: set[tuple] = set()
+    # 履歴シグネチャもまとめて取得し AI のプロンプトに渡す
+    history_sigs = _historic_signatures(session, HISTORY_DAYS_TO_AVOID)
+
     for profile in profiles:
-        menu = generate_menu_for_profile(
-            session, profile, today=today, exclude_signatures=used_signatures
-        )
+        excluded = used_signatures | history_sigs
+        menu = generate_ai_menu(session, profile, exclude_signatures=excluded)
+        if menu is None:
+            menu = generate_menu_for_profile(
+                session, profile, today=today, exclude_signatures=used_signatures
+            )
         produced.append(menu)
         used_signatures.add(menu.signature())
     return produced
