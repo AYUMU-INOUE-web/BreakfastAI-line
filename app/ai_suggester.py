@@ -4,13 +4,12 @@
   朝食で作れる簡単な料理の候補を JSON 配列で受け取る
 - 返却された料理は Ingredient テーブルに「1品 = 1レコード」として
   登録できる形(name / category / unit / calories_per_unit 等)で返す
-- 構造化出力(output_config.format + json_schema)で形を固定
-- 小さなプロンプトなので prompt caching は tools/system レベルの固定部分にのみ
-  適用(システムプロンプトが短いため実質メリットは小さいが、慣例どおり準備)
+- 形の固定には「強制 Tool Use」を使う:
+  `submit_dishes` という名前のツールを強制呼び出しさせ、その input を解釈する。
+  output_config.format は新しい SDK にしか無いのでツール側を採用。
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Iterable, Sequence
 
@@ -30,49 +29,51 @@ SYSTEM_PROMPT = (
     "カテゴリは main(主食)/protein(たんぱく)/side(副菜)/drink(飲み物) のいずれかに分類してください。"
     "使う食材はユーザーのリストから選ぶことを原則とし、"
     "ごく一般的な調味料や水・氷のみ追加で使って構いません。"
-    "日本語で回答してください。"
+    "日本語で回答し、必ず submit_dishes ツールを呼び出して結果を返してください。"
 )
 
-# JSON スキーマ: 登録時にそのまま Ingredient.to_dict 互換で使える形に合わせる
-SUGGESTION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "dishes": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "料理名(例: ゆで卵、しゃけ茶漬け)"},
-                    "category": {"type": "string", "enum": list(VALID_CATEGORIES)},
-                    "unit": {"type": "string", "description": "単位(例: 皿, 個, 杯, g, ml)"},
-                    "calories_per_unit": {"type": "number", "description": "1単位あたりのおおよそのカロリー(kcal)"},
-                    "default_portion": {"type": "number"},
-                    "min_portion": {"type": "number"},
-                    "max_portion": {"type": "number"},
-                    "uses_ingredients": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "ユーザーリストから使う食材名の配列",
+# 強制呼び出し用ツールの input_schema
+SUGGESTION_TOOL = {
+    "name": "submit_dishes",
+    "description": "ユーザーの食材から作れる朝食の料理候補を提出する。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "dishes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "料理名(例: ゆで卵、しゃけ茶漬け)"},
+                        "category": {"type": "string", "enum": list(VALID_CATEGORIES)},
+                        "unit": {"type": "string", "description": "単位(例: 皿, 個, 杯, g, ml)"},
+                        "calories_per_unit": {"type": "number", "description": "1単位あたりのおおよそのカロリー(kcal)"},
+                        "default_portion": {"type": "number"},
+                        "min_portion": {"type": "number"},
+                        "max_portion": {"type": "number"},
+                        "uses_ingredients": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "ユーザーリストから使う食材名の配列",
+                        },
+                        "description": {"type": "string", "description": "1〜2文の作り方メモ"},
                     },
-                    "description": {"type": "string", "description": "1〜2文の作り方メモ"},
+                    "required": [
+                        "name",
+                        "category",
+                        "unit",
+                        "calories_per_unit",
+                        "default_portion",
+                        "min_portion",
+                        "max_portion",
+                        "uses_ingredients",
+                        "description",
+                    ],
                 },
-                "required": [
-                    "name",
-                    "category",
-                    "unit",
-                    "calories_per_unit",
-                    "default_portion",
-                    "min_portion",
-                    "max_portion",
-                    "uses_ingredients",
-                    "description",
-                ],
-                "additionalProperties": False,
-            },
-        }
+            }
+        },
+        "required": ["dishes"],
     },
-    "required": ["dishes"],
-    "additionalProperties": False,
 }
 
 
@@ -82,6 +83,7 @@ def _build_user_prompt(ingredients: Sequence[str], n: int) -> str:
         f"次の食材を持っています:\n{listed}\n\n"
         f"この中から作れる、朝食向けの簡単な料理を {n} 案、重複しないように挙げてください。"
         "各料理はユーザーが毎日飽きずに食べられるよう、できるだけバラエティを持たせてください。"
+        "結果は submit_dishes ツールの dishes 配列で返してください。"
     )
 
 
@@ -99,7 +101,7 @@ def suggest_dishes(ingredients: Iterable[str], n: int = 5) -> list[dict]:
         raise AISuggesterUnavailableError(
             "ANTHROPIC_API_KEY is not configured. Set it in the environment to enable AI suggestions."
         )
-    names = [s for s in (n.strip() for n in ingredients) if s]
+    names = [s for s in (raw.strip() for raw in ingredients) if s]
     if not names:
         return []
     n = max(1, min(MAX_SUGGESTIONS, int(n)))
@@ -109,24 +111,24 @@ def suggest_dishes(ingredients: Iterable[str], n: int = 5) -> list[dict]:
         model=AI_MODEL,
         max_tokens=4096,
         system=SYSTEM_PROMPT,
-        output_config={
-            "format": {"type": "json_schema", "schema": SUGGESTION_SCHEMA}
-        },
+        tools=[SUGGESTION_TOOL],
+        tool_choice={"type": "tool", "name": "submit_dishes"},
         messages=[{"role": "user", "content": _build_user_prompt(names, n)}],
     )
-    text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), "")
-    if not text:
-        logger.warning("AI suggester returned empty text")
+
+    tool_block = next(
+        (b for b in response.content if getattr(b, "type", None) == "tool_use" and b.name == "submit_dishes"),
+        None,
+    )
+    if tool_block is None:
+        logger.warning("AI suggester returned no tool_use block (stop_reason=%s)", response.stop_reason)
         return []
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        logger.exception("AI suggester returned non-JSON content: %r", text[:200])
-        return []
-    dishes = parsed.get("dishes", [])
-    # 出力の安全側バリデーション(enum や範囲は json_schema で固定されているが、念のため)
+    dishes = tool_block.input.get("dishes", []) if isinstance(tool_block.input, dict) else []
+
     cleaned: list[dict] = []
     for d in dishes:
+        if not isinstance(d, dict):
+            continue
         if d.get("category") not in VALID_CATEGORIES:
             continue
         if d.get("min_portion", 0) > d.get("max_portion", 0):

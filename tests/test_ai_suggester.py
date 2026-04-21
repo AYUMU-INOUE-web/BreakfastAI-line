@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 from types import SimpleNamespace
@@ -7,9 +6,9 @@ from unittest.mock import patch
 import pytest
 
 
-def _fake_anthropic_response(dishes: list[dict]):
-    text_block = SimpleNamespace(type="text", text=json.dumps({"dishes": dishes}, ensure_ascii=False))
-    return SimpleNamespace(content=[text_block])
+def _fake_tool_response(dishes: list[dict]):
+    block = SimpleNamespace(type="tool_use", name="submit_dishes", input={"dishes": dishes}, id="toolu_1")
+    return SimpleNamespace(content=[block], stop_reason="tool_use")
 
 
 def test_suggester_returns_validated_dishes(monkeypatch):
@@ -46,10 +45,11 @@ def test_suggester_returns_validated_dishes(monkeypatch):
 
     class FakeMessages:
         def create(self, **kwargs):
+            # tool 強制呼び出しが指示されていること
+            assert kwargs["tool_choice"] == {"type": "tool", "name": "submit_dishes"}
+            assert kwargs["tools"][0]["name"] == "submit_dishes"
             assert kwargs["model"].startswith("claude-")
-            # output_config で format スキーマが渡っていること
-            assert kwargs["output_config"]["format"]["type"] == "json_schema"
-            return _fake_anthropic_response(dishes)
+            return _fake_tool_response(dishes)
 
     class FakeClient:
         def __init__(self, api_key=None):
@@ -73,7 +73,7 @@ def test_suggester_rejects_invalid_category(monkeypatch):
     dishes = [
         {
             "name": "変な料理",
-            "category": "dessert",  # 不正
+            "category": "dessert",
             "unit": "皿", "calories_per_unit": 100,
             "default_portion": 1, "min_portion": 1, "max_portion": 1,
             "uses_ingredients": [], "description": "",
@@ -89,7 +89,7 @@ def test_suggester_rejects_invalid_category(monkeypatch):
 
     class FakeMessages:
         def create(self, **kwargs):
-            return _fake_anthropic_response(dishes)
+            return _fake_tool_response(dishes)
 
     class FakeClient:
         def __init__(self, api_key=None):
@@ -138,7 +138,7 @@ def test_admin_api_status_and_suggest(monkeypatch):
 
     class FakeMessages:
         def create(self, **kwargs):
-            return _fake_anthropic_response(dishes)
+            return _fake_tool_response(dishes)
 
     class FakeClient:
         def __init__(self, api_key=None):
