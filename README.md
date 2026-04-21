@@ -66,7 +66,23 @@ APScheduler を使わず OS のスケジューラに任せる場合:
 0 7 * * * /path/to/.venv/bin/python /path/to/main.py send-now >> /var/log/breakfast.log 2>&1
 ```
 
-### 3. 食材 API (curl サンプル)
+### 3. GitHub Actions から一時公開 URL で開く
+
+手元に環境がなくてもブラウザから管理 UI を開けます。
+
+1. リポジトリ → `Actions` タブ → `Admin UI (tunnel)` を選択
+2. `Run workflow` を押して、稼働時間(分)を指定して実行
+3. ジョブのサマリに `https://xxx.trycloudflare.com` という URL が表示されるのでタップ
+4. 管理 UI(ダッシュボード / 食材 / テンプレート)が開く
+5. 終了は Actions 画面の `Cancel workflow` を押すか、指定時間経過で自動停止
+
+制約:
+- URL は起動ごとに変わる(Cloudflare Quick Tunnel)
+- ジョブ終了と同時に DB は消える(編集内容は引き継がれない)
+- 最大 6 時間(GitHub Actions の上限)
+- アクセス制御なし → URL の取り扱いに注意
+
+### 4. 食材 API (curl サンプル)
 
 ```bash
 curl -X POST http://localhost:5000/api/ingredients \

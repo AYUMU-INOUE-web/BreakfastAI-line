@@ -1,0 +1,110 @@
+name: Admin UI (tunnel)
+
+# 手動起動すると、管理UIを一時的な公開URL(Cloudflare Quick Tunnel)で開ける。
+# GitHub Actions はクラウド上で動くため localhost 直接アクセスは不可。
+# 代わりに trycloudflare.com のランダム URL をサマリに表示する。
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: 稼働時間(分)。上限 300(Actions 全体の6時間制限の内)
+        required: true
+        default: "60"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Seed ingredients
+        env:
+          DATABASE_URL: sqlite:///breakfast.db
+        run: python main.py seed
+
+      - name: Install cloudflared
+        run: |
+          curl -sSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin/cloudflared
+          cloudflared --version
+
+      - name: Start Flask in background
+        env:
+          DATABASE_URL: sqlite:///breakfast.db
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          ADMIN_HOST: 127.0.0.1
+          ADMIN_PORT: "5000"
+          TIMEZONE: Asia/Tokyo
+        run: |
+          nohup python main.py serve > flask.log 2>&1 &
+          echo $! > flask.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:5000/ > /dev/null; then
+              echo "Flask is up"
+              break
+            fi
+            sleep 1
+          done
+          if ! curl -sf http://127.0.0.1:5000/ > /dev/null; then
+            echo "Flask did not start in time" >&2
+            cat flask.log >&2
+            exit 1
+          fi
+
+      - name: Start Cloudflare Quick Tunnel
+        id: tunnel
+        run: |
+          nohup cloudflared tunnel --no-autoupdate --url http://127.0.0.1:5000 > tunnel.log 2>&1 &
+          echo $! > tunnel.pid
+          URL=""
+          for i in $(seq 1 60); do
+            URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | head -n1 || true)
+            if [ -n "$URL" ]; then break; fi
+            sleep 2
+          done
+          if [ -z "$URL" ]; then
+            echo "Failed to obtain tunnel URL" >&2
+            cat tunnel.log >&2
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          {
+            echo "## 🟢 管理UIが公開されました"
+            echo ""
+            echo "- URL: **$URL**"
+            echo "- 有効期限: ${{ github.event.inputs.duration_minutes }} 分 または ジョブ停止まで"
+            echo "- DB: ランナー内の一時SQLite(ジョブ終了で消失)"
+            echo ""
+            echo "停止するには Actions の \"Cancel workflow\" を押してください。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Admin UI URL::$URL"
+
+      - name: Keep alive
+        run: |
+          MINUTES=${{ github.event.inputs.duration_minutes }}
+          if [ "$MINUTES" -gt 300 ]; then MINUTES=300; fi
+          sleep $((MINUTES * 60))
+
+      - name: Cleanup
+        if: always()
+        run: |
+          [ -f tunnel.pid ] && kill "$(cat tunnel.pid)" 2>/dev/null || true
+          [ -f flask.pid ] && kill "$(cat flask.pid)" 2>/dev/null || true
+          tail -n 30 flask.log || true
+          tail -n 30 tunnel.log || true
