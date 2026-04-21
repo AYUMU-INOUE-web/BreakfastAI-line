@@ -10,6 +10,7 @@ from app.config import NOTIFY_HOUR, NOTIFY_MINUTE, TIMEZONE
 from app.database import session_scope
 from app.line_notifier import send_menu
 from app.menu_generator import generate_menu, save_history
+from app.template_renderer import get_active_body
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,8 @@ def deliver_breakfast() -> None:
         with session_scope() as s:
             menu = generate_menu(s)
             save_history(s, menu)
-        send_menu(menu)
+            template_body = get_active_body(s)
+        send_menu(menu, template_body=template_body)
         logger.info(
             "Delivered menu '%s' (%.0f kcal, fallback=%s)",
             menu.menu_name,

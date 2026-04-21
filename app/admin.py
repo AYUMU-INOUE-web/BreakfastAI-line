@@ -1,13 +1,21 @@
-"""食材管理用の最小限の REST API + 簡易UI。
+"""管理 Web アプリ。
 
-エンドポイント:
-  GET    /                  食材一覧の管理画面 (HTML)
-  GET    /api/ingredients   一覧
-  POST   /api/ingredients   追加
-  PUT    /api/ingredients/<id> 編集
-  DELETE /api/ingredients/<id> 削除
-  POST   /api/preview       現在の食材で1献立試し生成
-  POST   /api/send-now      生成 + LINE 配信を即時実行
+タブ構成:
+  - ダッシュボード: プレビュー / LINE 即時送信
+  - 食材管理:    追加 / 編集 / 削除 / 有効化切替
+  - テンプレート: 配信文面の編集 + プレビュー
+
+REST API:
+  GET    /api/ingredients                一覧
+  POST   /api/ingredients                追加
+  PUT    /api/ingredients/<id>           編集
+  DELETE /api/ingredients/<id>           削除
+  GET    /api/template                   現在のアクティブテンプレ
+  PUT    /api/template                   テンプレート本文を更新
+  POST   /api/template/reset             既定に戻す
+  POST   /api/template/preview           任意の本文+サンプルデータでプレビュー
+  POST   /api/preview                    現在の食材で1献立試し生成
+  POST   /api/send-now                   生成 + LINE 配信を即時実行
 """
 from __future__ import annotations
 
@@ -16,79 +24,177 @@ from flask import Flask, jsonify, render_template_string, request
 from app.database import init_db, session_scope
 from app.line_notifier import send_menu
 from app.menu_generator import generate_menu, save_history
-from app.models import Ingredient
+from app.models import Ingredient, MessageTemplate
+from app.template_renderer import (
+    AVAILABLE_VARIABLES,
+    DEFAULT_TEMPLATE_BODY,
+    DEFAULT_TEMPLATE_NAME,
+    ensure_default_template,
+    get_active_body,
+    render,
+    sample_menu,
+    strict_render,
+)
 
 VALID_CATEGORIES = {"main", "protein", "side", "drink"}
+CATEGORY_LABEL = {
+    "main": "主食",
+    "protein": "たんぱく",
+    "side": "副菜",
+    "drink": "飲み物",
+}
 
 INDEX_HTML = """
 <!doctype html>
 <html lang=\"ja\">
 <head>
 <meta charset=\"utf-8\">
-<title>朝ごはん献立管理</title>
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<title>朝ごはん献立 管理</title>
 <style>
-  body{font-family:system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 12px;}
-  table{width:100%;border-collapse:collapse;margin-bottom:16px;}
-  th,td{border:1px solid #ddd;padding:6px 8px;font-size:14px;text-align:left;}
-  th{background:#f4f4f4;}
-  form{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:24px;}
-  form input,form select{padding:6px;}
-  button{padding:6px 12px;}
-  .actions{display:flex;gap:8px;}
+  :root { --bg:#fafaf7; --fg:#222; --muted:#666; --accent:#ff8a4c; --border:#e0ddd5; }
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,\"Hiragino Kaku Gothic ProN\",sans-serif;margin:0;background:var(--bg);color:var(--fg);}
+  header{background:#fff;border-bottom:1px solid var(--border);padding:16px 20px;}
+  header h1{margin:0;font-size:18px;}
+  nav{background:#fff;border-bottom:1px solid var(--border);display:flex;}
+  nav button{background:none;border:0;padding:14px 20px;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:3px solid transparent;}
+  nav button.active{color:var(--accent);border-color:var(--accent);font-weight:600;}
+  main{max-width:900px;margin:24px auto;padding:0 16px;}
+  section{display:none;}
+  section.active{display:block;}
+  h2{font-size:16px;margin:24px 0 12px;}
+  .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;}
+  table{width:100%;border-collapse:collapse;background:#fff;}
+  th,td{border-bottom:1px solid var(--border);padding:10px 8px;font-size:13px;text-align:left;}
+  th{background:#f4f2ec;font-weight:600;}
+  tr:last-child td{border-bottom:0;}
+  .row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px;}
+  .row input,.row select{padding:8px;font-size:13px;border:1px solid var(--border);border-radius:4px;}
+  textarea{width:100%;min-height:220px;font-family:\"SF Mono\",Menlo,monospace;font-size:13px;padding:10px;border:1px solid var(--border);border-radius:4px;}
+  button.primary{background:var(--accent);color:#fff;border:0;padding:10px 16px;border-radius:4px;font-size:14px;cursor:pointer;}
+  button.secondary{background:#fff;color:var(--fg);border:1px solid var(--border);padding:10px 16px;border-radius:4px;font-size:14px;cursor:pointer;}
+  button.danger{background:#fff;color:#c43;border:1px solid #f0cfc5;padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+  pre.preview{background:#f9f6ef;border:1px solid var(--border);border-radius:4px;padding:14px;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.7;}
+  .muted{color:var(--muted);font-size:12px;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#eee6d9;color:#6c5a3d;}
+  .badge.inactive{background:#eee;color:#888;}
+  .help{background:#fff7ef;border:1px solid #f5d9b8;border-radius:4px;padding:10px 12px;font-size:12px;margin:10px 0;}
+  .help code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:3px;}
+  .group{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media (max-width:640px){ .row{grid-template-columns:repeat(2,1fr);} .group{grid-template-columns:1fr;} }
 </style>
 </head>
 <body>
-<h1>朝ごはん献立 管理</h1>
+<header><h1>🍳 朝ごはん献立 管理</h1></header>
+<nav>
+  <button data-tab=\"dashboard\" class=\"active\">ダッシュボード</button>
+  <button data-tab=\"ingredients\">食材</button>
+  <button data-tab=\"template\">テンプレート</button>
+</nav>
+<main>
 
-<h2>登録済み食材</h2>
-<table id=\"ingredients\">
-  <thead><tr><th>名前</th><th>カテゴリ</th><th>kcal/単位</th><th>標準量</th><th>範囲</th><th>有効</th><th></th></tr></thead>
-  <tbody></tbody>
-</table>
+<section id=\"sec-dashboard\" class=\"active\">
+  <div class=\"card\">
+    <h2>本日の献立プレビュー</h2>
+    <p class=\"muted\">現在の食材と有効テンプレートを使って1献立をシミュレートします。LINEへは送信されません。</p>
+    <div class=\"actions\">
+      <button class=\"primary\" onclick=\"preview()\">プレビュー生成</button>
+      <button class=\"secondary\" onclick=\"sendNow()\">いますぐ LINE 送信</button>
+    </div>
+    <pre class=\"preview\" id=\"dashOut\">(未生成)</pre>
+  </div>
+</section>
 
-<h2>食材を追加</h2>
-<form id=\"addForm\">
-  <input name=\"name\" placeholder=\"名前 (例: 食パン)\" required>
-  <select name=\"category\" required>
-    <option value=\"main\">main(主食)</option>
-    <option value=\"protein\">protein(たんぱく)</option>
-    <option value=\"side\">side(副菜)</option>
-    <option value=\"drink\">drink(飲み物)</option>
-  </select>
-  <input name=\"unit\" placeholder=\"単位 (例: 枚, g, ml)\" required>
-  <input name=\"calories_per_unit\" type=\"number\" step=\"0.1\" placeholder=\"1単位あたり kcal\" required>
-  <input name=\"default_portion\" type=\"number\" step=\"0.1\" placeholder=\"標準量\" required>
-  <input name=\"min_portion\" type=\"number\" step=\"0.1\" placeholder=\"最小量\" required>
-  <input name=\"max_portion\" type=\"number\" step=\"0.1\" placeholder=\"最大量\" required>
-  <button type=\"submit\">追加</button>
-</form>
+<section id=\"sec-ingredients\">
+  <div class=\"card\">
+    <h2>食材を追加</h2>
+    <form id=\"addForm\">
+      <div class=\"row\">
+        <input name=\"name\" placeholder=\"名前 (例: 食パン)\" required>
+        <select name=\"category\" required>
+          <option value=\"main\">主食</option>
+          <option value=\"protein\">たんぱく</option>
+          <option value=\"side\">副菜</option>
+          <option value=\"drink\">飲み物</option>
+        </select>
+        <input name=\"unit\" placeholder=\"単位 (枚, g, ml)\" required>
+        <input name=\"calories_per_unit\" type=\"number\" step=\"0.01\" placeholder=\"1単位あたり kcal\" required>
+      </div>
+      <div class=\"row\">
+        <input name=\"default_portion\" type=\"number\" step=\"0.1\" placeholder=\"標準量\" required>
+        <input name=\"min_portion\" type=\"number\" step=\"0.1\" placeholder=\"最小量\" required>
+        <input name=\"max_portion\" type=\"number\" step=\"0.1\" placeholder=\"最大量\" required>
+        <button type=\"submit\" class=\"primary\">追加</button>
+      </div>
+    </form>
+  </div>
+  <div class=\"card\">
+    <h2>登録済み食材</h2>
+    <table id=\"ingredients\">
+      <thead><tr><th>名前</th><th>カテゴリ</th><th>kcal/単位</th><th>標準量</th><th>範囲</th><th>状態</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
 
-<h2>動作確認</h2>
-<div class=\"actions\">
-  <button onclick=\"preview()\">献立プレビュー</button>
-  <button onclick=\"sendNow()\">いますぐLINE送信</button>
-</div>
-<pre id=\"out\"></pre>
+<section id=\"sec-template\">
+  <div class=\"card\">
+    <h2>配信テンプレートの編集</h2>
+    <p class=\"muted\">Jinja2 構文で編集できます。保存すると次回の配信から反映されます。</p>
+    <textarea id=\"tmplBody\"></textarea>
+    <div class=\"actions\">
+      <button class=\"primary\" onclick=\"saveTemplate()\">保存</button>
+      <button class=\"secondary\" onclick=\"previewTemplate()\">プレビュー</button>
+      <button class=\"secondary\" onclick=\"resetTemplate()\">既定に戻す</button>
+    </div>
+    <div class=\"help\">
+      <strong>使える変数</strong>
+      <ul id=\"varList\" style=\"margin:6px 0 0 18px;padding:0;\"></ul>
+    </div>
+  </div>
+  <div class=\"card\">
+    <h2>プレビュー(サンプル献立で描画)</h2>
+    <pre class=\"preview\" id=\"tmplOut\">(未プレビュー)</pre>
+  </div>
+</section>
 
+</main>
 <script>
-async function load(){
+const tabs = document.querySelectorAll('nav button');
+const sections = document.querySelectorAll('main section');
+tabs.forEach(b => b.onclick = () => {
+  tabs.forEach(x => x.classList.remove('active'));
+  sections.forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  document.getElementById('sec-' + b.dataset.tab).classList.add('active');
+  if(b.dataset.tab === 'template') loadTemplate();
+  if(b.dataset.tab === 'ingredients') loadIngredients();
+});
+
+const CATEGORY_LABEL = {main:'主食',protein:'たんぱく',side:'副菜',drink:'飲み物'};
+
+async function loadIngredients(){
   const res = await fetch('/api/ingredients');
   const data = await res.json();
   const tbody = document.querySelector('#ingredients tbody');
   tbody.innerHTML = '';
   for(const ing of data){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${ing.name}</td><td>${ing.category}</td>` +
-      `<td>${ing.calories_per_unit}</td><td>${ing.default_portion}${ing.unit}</td>` +
-      `<td>${ing.min_portion}〜${ing.max_portion}${ing.unit}</td>` +
-      `<td>${ing.active ? '✓' : '×'}</td>` +
-      `<td><button data-id=\"${ing.id}\" class=\"del\">削除</button></td>`;
+    tr.innerHTML = `<td>${escapeHtml(ing.name)}</td>` +
+      `<td>${CATEGORY_LABEL[ing.category] || ing.category}</td>` +
+      `<td>${ing.calories_per_unit}</td>` +
+      `<td>${ing.default_portion}${escapeHtml(ing.unit)}</td>` +
+      `<td>${ing.min_portion}〜${ing.max_portion}${escapeHtml(ing.unit)}</td>` +
+      `<td><span class=\"badge ${ing.active?'':'inactive'}\">${ing.active?'有効':'無効'}</span></td>` +
+      `<td><button data-id=\"${ing.id}\" class=\"danger\">削除</button></td>`;
     tbody.appendChild(tr);
   }
-  tbody.querySelectorAll('.del').forEach(b => b.onclick = async () => {
+  tbody.querySelectorAll('button.danger').forEach(b => b.onclick = async () => {
     if(!confirm('削除しますか?')) return;
     await fetch('/api/ingredients/' + b.dataset.id, {method:'DELETE'});
-    load();
+    loadIngredients();
   });
 }
 document.getElementById('addForm').onsubmit = async (e) => {
@@ -97,18 +203,50 @@ document.getElementById('addForm').onsubmit = async (e) => {
   const body = Object.fromEntries(fd.entries());
   for(const k of ['calories_per_unit','default_portion','min_portion','max_portion']) body[k] = Number(body[k]);
   const res = await fetch('/api/ingredients', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-  if(res.ok){ e.target.reset(); load(); } else { alert('追加失敗: ' + await res.text()); }
+  if(res.ok){ e.target.reset(); loadIngredients(); } else { alert('追加失敗: ' + await res.text()); }
 };
+
+async function loadTemplate(){
+  const res = await fetch('/api/template');
+  const data = await res.json();
+  document.getElementById('tmplBody').value = data.body;
+  const ul = document.getElementById('varList');
+  ul.innerHTML = '';
+  for(const v of data.variables){
+    const li = document.createElement('li');
+    li.innerHTML = `<code>${escapeHtml(v.name)}</code> — ${escapeHtml(v.description)}`;
+    ul.appendChild(li);
+  }
+}
+async function saveTemplate(){
+  const body = document.getElementById('tmplBody').value;
+  const res = await fetch('/api/template', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({body})});
+  if(res.ok){ await previewTemplate(); alert('保存しました'); } else { alert('保存失敗: ' + await res.text()); }
+}
+async function previewTemplate(){
+  const body = document.getElementById('tmplBody').value;
+  const res = await fetch('/api/template/preview', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({body})});
+  const data = await res.json();
+  document.getElementById('tmplOut').textContent = data.preview;
+}
+async function resetTemplate(){
+  if(!confirm('テンプレートを既定に戻しますか?')) return;
+  const res = await fetch('/api/template/reset', {method:'POST'});
+  if(res.ok){ loadTemplate(); }
+}
 async function preview(){
   const res = await fetch('/api/preview', {method:'POST'});
-  document.getElementById('out').textContent = JSON.stringify(await res.json(), null, 2);
+  const data = await res.json();
+  document.getElementById('dashOut').textContent = data.rendered + '\\n\\n― 生成内容 ―\\n' + JSON.stringify({menu_name:data.menu_name, total_calories:data.total_calories, is_fallback:data.is_fallback, items:data.items}, null, 2);
 }
 async function sendNow(){
   if(!confirm('LINEへ即時送信します。よろしいですか?')) return;
   const res = await fetch('/api/send-now', {method:'POST'});
-  document.getElementById('out').textContent = JSON.stringify(await res.json(), null, 2);
+  const data = await res.json();
+  document.getElementById('dashOut').textContent = data.rendered + '\\n\\n(送信しました)';
 }
-load();
+function escapeHtml(s){ return String(s).replace(/[&<>\"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\\'':'&#39;' })[c]); }
+loadIngredients();
 </script>
 </body></html>
 """
@@ -148,12 +286,15 @@ def _validate_payload(payload: dict) -> tuple[dict, str | None]:
 
 def create_app() -> Flask:
     init_db()
+    with session_scope() as s:
+        ensure_default_template(s)
     app = Flask(__name__)
 
     @app.get("/")
     def index():
         return render_template_string(INDEX_HTML)
 
+    # ---- ingredients ----
     @app.get("/api/ingredients")
     def list_ingredients():
         with session_scope() as s:
@@ -194,18 +335,86 @@ def create_app() -> Flask:
             s.delete(ing)
         return "", 204
 
+    # ---- template ----
+    @app.get("/api/template")
+    def get_template():
+        with session_scope() as s:
+            body = get_active_body(s)
+        return jsonify(
+            {
+                "body": body,
+                "variables": [{"name": n, "description": d} for n, d in AVAILABLE_VARIABLES],
+            }
+        )
+
+    @app.put("/api/template")
+    def update_template():
+        payload = request.get_json(force=True) or {}
+        body = payload.get("body")
+        if not isinstance(body, str) or not body.strip():
+            return "body must be a non-empty string", 400
+        # 保存前に構文チェック(エラーは400で返して編集中の事故を防ぐ)
+        try:
+            strict_render(body, sample_menu())
+        except Exception as exc:  # noqa: BLE001
+            return f"template render failed: {exc}", 400
+        with session_scope() as s:
+            active = (
+                s.query(MessageTemplate).filter(MessageTemplate.is_active.is_(True)).first()
+            )
+            if active is None:
+                active = MessageTemplate(name=DEFAULT_TEMPLATE_NAME, body=body, is_active=True)
+                s.add(active)
+            else:
+                active.body = body
+            s.flush()
+            return jsonify(active.to_dict())
+
+    @app.post("/api/template/reset")
+    def reset_template():
+        with session_scope() as s:
+            active = (
+                s.query(MessageTemplate).filter(MessageTemplate.is_active.is_(True)).first()
+            )
+            if active is None:
+                active = MessageTemplate(
+                    name=DEFAULT_TEMPLATE_NAME, body=DEFAULT_TEMPLATE_BODY, is_active=True
+                )
+                s.add(active)
+            else:
+                active.body = DEFAULT_TEMPLATE_BODY
+            s.flush()
+            return jsonify(active.to_dict())
+
+    @app.post("/api/template/preview")
+    def preview_template():
+        payload = request.get_json(force=True) or {}
+        body = payload.get("body") or DEFAULT_TEMPLATE_BODY
+        try:
+            rendered = strict_render(body, sample_menu())
+        except Exception as exc:  # noqa: BLE001
+            return f"render failed: {exc}", 400
+        return jsonify({"preview": rendered})
+
+    # ---- menu generation / delivery ----
     @app.post("/api/preview")
-    def preview():
+    def preview_menu():
         with session_scope() as s:
             menu = generate_menu(s)
-            return jsonify(menu.to_payload())
+            body = get_active_body(s)
+        payload = menu.to_payload()
+        payload["rendered"] = render(body, menu)
+        return jsonify(payload)
 
     @app.post("/api/send-now")
     def send_now():
         with session_scope() as s:
             menu = generate_menu(s)
             save_history(s, menu)
-        send_menu(menu)
-        return jsonify(menu.to_payload())
+            body = get_active_body(s)
+        send_menu(menu, template_body=body)
+        payload = menu.to_payload()
+        payload["rendered"] = render(body, menu)
+        return jsonify(payload)
 
     return app

@@ -1,11 +1,6 @@
 """LINE Messaging API への配信。
 
-スマホで読みやすいよう、テキストを以下のフォーマットで整形する:
-  きょうの朝ごはん (合計 692 kcal)
-  ─────────────
-  ・食パン(6枚切): 1枚 (160 kcal)
-  ・目玉焼き: 1個 (90 kcal)
-  ...
+文面の整形はユーザーが編集できるテンプレート (Jinja2) に委譲する。
 """
 from __future__ import annotations
 
@@ -21,36 +16,23 @@ from linebot.v3.messaging import (
 
 from app.config import LINE_CHANNEL_ACCESS_TOKEN, LINE_USER_ID
 from app.menu_generator import GeneratedMenu
+from app.template_renderer import DEFAULT_TEMPLATE_BODY, render
 
 logger = logging.getLogger(__name__)
 
 
-def format_menu(menu: GeneratedMenu) -> str:
-    header = "🍳 きょうの朝ごはん"
-    if menu.is_fallback:
-        header += "(代替メニュー)"
-    lines = [
-        header,
-        f"《{menu.menu_name}》",
-        f"合計カロリー: {round(menu.total_calories)} kcal",
-        "─────────────",
-    ]
-    for item in menu.items:
-        portion = item.portion
-        portion_str = f"{int(portion)}" if portion == int(portion) else f"{portion:g}"
-        lines.append(f"・{item.name}: {portion_str}{item.unit} ({round(item.calories)} kcal)")
-    lines.append("")
-    lines.append("今日も一日がんばろう!")
-    return "\n".join(lines)
+def format_menu(menu: GeneratedMenu, template_body: str | None = None) -> str:
+    body = template_body if template_body is not None else DEFAULT_TEMPLATE_BODY
+    return render(body, menu)
 
 
-def send_menu(menu: GeneratedMenu) -> None:
+def send_menu(menu: GeneratedMenu, template_body: str | None = None) -> None:
+    text = format_menu(menu, template_body)
     if not LINE_CHANNEL_ACCESS_TOKEN or not LINE_USER_ID:
         logger.warning("LINE credentials are not configured; skipping push.")
-        logger.info("Would have sent:\n%s", format_menu(menu))
+        logger.info("Would have sent:\n%s", text)
         return
 
-    text = format_menu(menu)
     config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
     with ApiClient(config) as client:
         api = MessagingApi(client)
@@ -60,4 +42,4 @@ def send_menu(menu: GeneratedMenu) -> None:
                 messages=[TextMessage(text=text)],
             )
         )
-    logger.info("Pushed today's menu to LINE user %s", LINE_USER_ID)
+    logger.info("Pushed today's menu to LINE target %s", LINE_USER_ID)

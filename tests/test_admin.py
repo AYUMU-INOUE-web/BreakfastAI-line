@@ -58,3 +58,48 @@ def test_invalid_category_rejected(client):
         "calories_per_unit": 1, "default_portion": 1, "min_portion": 1, "max_portion": 1,
     })
     assert res.status_code == 400
+
+
+def test_template_get_returns_default_on_first_access(client):
+    res = client.get("/api/template")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert "きょうの朝ごはん" in data["body"]
+    assert any(v["name"] == "items" for v in data["variables"])
+
+
+def test_template_update_and_fetch(client):
+    body = "テスト 合計 {{ total_calories_int }} kcal"
+    res = client.put("/api/template", json={"body": body})
+    assert res.status_code == 200
+    assert res.get_json()["body"] == body
+
+    res = client.get("/api/template")
+    assert res.get_json()["body"] == body
+
+
+def test_template_update_rejects_invalid_syntax(client):
+    res = client.put("/api/template", json={"body": "{{ broken("})
+    assert res.status_code == 400
+
+
+def test_template_update_rejects_empty_body(client):
+    res = client.put("/api/template", json={"body": "   "})
+    assert res.status_code == 400
+
+
+def test_template_preview_uses_supplied_body(client):
+    res = client.post(
+        "/api/template/preview",
+        json={"body": "合計 {{ total_calories_int }}kcal"},
+    )
+    assert res.status_code == 200
+    assert "合計 494kcal" == res.get_json()["preview"]
+
+
+def test_template_reset_restores_default(client):
+    client.put("/api/template", json={"body": "変更済み"})
+    res = client.post("/api/template/reset")
+    assert res.status_code == 200
+    body = client.get("/api/template").get_json()["body"]
+    assert "きょうの朝ごはん" in body

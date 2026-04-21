@@ -48,3 +48,24 @@ class MenuHistory(Base):
     total_calories = Column(Float, nullable=False)
     is_fallback = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MessageTemplate(Base):
+    """LINE配信のテンプレート。is_active=True のものが1つだけ使われる想定。"""
+
+    __tablename__ = "message_templates"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(64), nullable=False)
+    body = Column(Text, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "body": self.body,
+            "is_active": self.is_active,
+        }

@@ -8,7 +8,8 @@
 - 許容 **650〜750kcal** のランダム献立を自動生成
 - 直近 **3日以内と同じ献立は回避**(飽きずに食べられる)
 - 生成に失敗した場合は **固定の代替メニュー** を配信
-- スマホで読みやすい LINE テキスト整形
+- **配信テンプレートを Web UI から編集可能**(Jinja2)
+- 食材の追加 / 編集 / 削除を Web UI から操作可能
 - 管理画面 (Flask) からプレビュー / 即時送信が可能
 
 ## 構成
@@ -16,14 +17,15 @@
 ```
 .
 ├── app/
-│   ├── admin.py            # 管理用 Flask API + 簡易 UI
-│   ├── config.py           # 環境変数読み込み
-│   ├── database.py         # SQLAlchemy セッション管理
-│   ├── line_notifier.py    # LINE Messaging API 連携
-│   ├── menu_generator.py   # 献立生成ロジック
-│   ├── models.py           # Ingredient / MenuHistory
-│   ├── scheduler.py        # APScheduler 毎朝 7:00 起動
-│   └── seed_data.py        # サンプル食材
+│   ├── admin.py              # 管理用 Flask Web アプリ + REST API
+│   ├── config.py             # 環境変数読み込み
+│   ├── database.py           # SQLAlchemy セッション管理
+│   ├── line_notifier.py      # LINE Messaging API 連携
+│   ├── menu_generator.py     # 献立生成ロジック
+│   ├── models.py             # Ingredient / MenuHistory / MessageTemplate
+│   ├── scheduler.py          # APScheduler 毎朝 7:00 起動
+│   ├── seed_data.py          # サンプル食材
+│   └── template_renderer.py  # Jinja2 テンプレート描画
 ├── tests/                  # pytest
 ├── main.py                 # エントリーポイント (serve / send-now / seed)
 ├── requirements.txt
@@ -49,7 +51,10 @@ python main.py seed        # サンプル食材を投入
 python main.py serve
 ```
 
-- `http://localhost:5000/` … 食材管理 UI
+- `http://localhost:5000/` … Web 管理アプリ(3タブ)
+  - **ダッシュボード**: 献立プレビュー / LINE 即時送信
+  - **食材**: 追加 / 削除 / 一覧
+  - **テンプレート**: 配信文面編集 + リアルタイムプレビュー
 - 毎朝 7:00(`TIMEZONE` / `NOTIFY_HOUR` で変更可)に LINE 配信
 
 ### 2. cron / systemd タイマーから単発実行
@@ -101,6 +106,35 @@ curl -X POST http://localhost:5000/api/ingredients \
 ・バナナ: 1本 (90 kcal)
 ・牛乳: 200ml (134 kcal)
 
+今日も一日がんばろう!
+```
+
+## 配信テンプレート
+
+配信文面は Jinja2 テンプレートで、Web UI の **「テンプレート」タブ** から編集できます。
+保存前に構文チェックが走るので壊れたテンプレートは保存できません。
+
+利用できる変数:
+
+| 変数 | 説明 |
+| --- | --- |
+| `menu_name` | 献立の名前 |
+| `total_calories` | 合計カロリー(小数) |
+| `total_calories_int` | 合計カロリー(整数丸め) |
+| `is_fallback` | 代替メニューかどうか |
+| `items` | 食材リスト。各要素は `name / portion / portion_display / unit / calories / calories_int` |
+| `date` | 配信日 `YYYY-MM-DD` |
+
+既定テンプレート(`app/template_renderer.py` の `DEFAULT_TEMPLATE_BODY`):
+
+```
+🍳 きょうの朝ごはん{% if is_fallback %}(代替メニュー){% endif %}
+《{{ menu_name }}》
+合計カロリー: {{ total_calories_int }} kcal
+─────────────
+{% for item in items -%}
+・{{ item.name }}: {{ item.portion_display }}{{ item.unit }} ({{ item.calories_int }} kcal)
+{% endfor %}
 今日も一日がんばろう!
 ```
 
