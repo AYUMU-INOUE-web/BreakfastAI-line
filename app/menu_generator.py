@@ -79,6 +79,8 @@ class GeneratedMenu:
     total_calories: float = 0.0
     is_fallback: bool = False
     profile_name: str = ""
+    # "ai" = Claude 生成 / "rule" = ルールベース生成
+    source: str = "rule"
 
     def to_payload(self) -> dict:
         return {
@@ -87,6 +89,7 @@ class GeneratedMenu:
             "items": [asdict(i) for i in self.items],
             "total_calories": round(self.total_calories, 1),
             "is_fallback": self.is_fallback,
+            "source": self.source,
         }
 
     def signature(self) -> tuple:

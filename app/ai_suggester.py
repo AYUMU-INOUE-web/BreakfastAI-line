@@ -263,6 +263,7 @@ def generate_ai_menu(
         total_calories=total,
         is_fallback=False,
         profile_name=profile.name,
+        source="ai",
     )
 
 

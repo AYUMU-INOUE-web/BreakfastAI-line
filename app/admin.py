@@ -81,6 +81,13 @@ INDEX_HTML = """
   button.secondary{background:#fff;color:var(--fg);border:1px solid var(--border);padding:10px 16px;border-radius:4px;font-size:14px;cursor:pointer;}
   button.danger{background:#fff;color:#c43;border:1px solid #f0cfc5;padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;}
   button.small{padding:4px 10px;font-size:12px;border-radius:4px;cursor:pointer;}
+  button[disabled]{opacity:0.5;cursor:not-allowed;}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #eee;border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:8px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .loading{display:flex;align-items:center;gap:8px;padding:14px;background:#fff7ef;border:1px solid #f5d9b8;border-radius:4px;font-size:13px;margin-top:12px;}
+  .loading .sub{color:var(--muted);font-size:12px;}
+  .source-ai{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#e7f0e3;color:#365;}
+  .source-rule{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#eee6d9;color:#6c5a3d;}
   button.small.primary{background:var(--accent);color:#fff;border:0;}
   button.small.secondary{background:#fff;color:var(--fg);border:1px solid var(--border);}
   td.edit input,td.edit select{width:100%;padding:4px;font-size:12px;border:1px solid var(--border);border-radius:3px;box-sizing:border-box;}
@@ -112,9 +119,17 @@ INDEX_HTML = """
     <p class=\"muted\">登録済みの素材から AI が 700kcal / 300kcal の朝食を組み立てます。LINEへは送信されません。</p>
     <p class=\"muted\" id=\"aiBadge\" style=\"margin:4px 0;\"></p>
     <div class=\"actions\">
-      <button class=\"primary\" onclick=\"preview()\">プレビュー生成</button>
-      <button class=\"secondary\" onclick=\"sendNow()\">いますぐ LINE 送信</button>
+      <button class=\"primary\" id=\"btnPreview\" onclick=\"preview()\">プレビュー生成</button>
+      <button class=\"secondary\" id=\"btnSendNow\" onclick=\"sendNow()\">いますぐ LINE 送信</button>
     </div>
+    <div class=\"loading\" id=\"dashLoading\" style=\"display:none;\">
+      <span class=\"spinner\"></span>
+      <div>
+        <div id=\"dashLoadingMain\">🤖 AI が献立を考えています...</div>
+        <div class=\"sub\" id=\"dashLoadingSub\">20〜40 秒ほどかかります</div>
+      </div>
+    </div>
+    <div id=\"dashSource\" style=\"margin-top:12px;\"></div>
     <pre class=\"preview\" id=\"dashOut\">(未生成)</pre>
   </div>
 </section>
@@ -288,16 +303,62 @@ async function resetTemplate(){
   const res = await fetch('/api/template/reset', {method:'POST'});
   if(res.ok){ loadTemplate(); }
 }
+function _setDashBusy(busy, mainText, subText){
+  const loading = document.getElementById('dashLoading');
+  const btns = [document.getElementById('btnPreview'), document.getElementById('btnSendNow')];
+  btns.forEach(b => { if(b) b.disabled = busy; });
+  if(busy){
+    document.getElementById('dashLoadingMain').textContent = mainText || '🤖 AI が献立を考えています...';
+    document.getElementById('dashLoadingSub').textContent = subText || '20〜40 秒ほどかかります';
+    loading.style.display = 'flex';
+    document.getElementById('dashSource').innerHTML = '';
+  } else {
+    loading.style.display = 'none';
+  }
+}
+function _renderSourceBadges(menus){
+  const wrap = document.getElementById('dashSource');
+  wrap.innerHTML = '';
+  for(const m of menus){
+    const label = m.source === 'ai' ? 'AI 生成' : 'ルールベース';
+    const cls = m.source === 'ai' ? 'source-ai' : 'source-rule';
+    const span = document.createElement('span');
+    span.className = cls;
+    span.style.marginRight = '6px';
+    span.textContent = `${m.profile_name}: ${label}`;
+    wrap.appendChild(span);
+  }
+}
 async function preview(){
-  const res = await fetch('/api/preview', {method:'POST'});
-  const data = await res.json();
-  document.getElementById('dashOut').textContent = data.rendered + '\\n\\n― 生成内容 ―\\n' + JSON.stringify(data.menus, null, 2);
+  _setDashBusy(true);
+  try {
+    const res = await fetch('/api/preview', {method:'POST'});
+    if(!res.ok){
+      document.getElementById('dashOut').textContent = '失敗: ' + await res.text();
+      return;
+    }
+    const data = await res.json();
+    _renderSourceBadges(data.menus || []);
+    document.getElementById('dashOut').textContent = data.rendered + '\\n\\n― 生成内容 ―\\n' + JSON.stringify(data.menus, null, 2);
+  } finally {
+    _setDashBusy(false);
+  }
 }
 async function sendNow(){
   if(!confirm('LINEへ即時送信します。よろしいですか?')) return;
-  const res = await fetch('/api/send-now', {method:'POST'});
-  const data = await res.json();
-  document.getElementById('dashOut').textContent = data.rendered + '\\n\\n(送信しました)';
+  _setDashBusy(true, '🤖 AI が献立を考え、LINE に送信します...', 'LINE の配信まで含めて 30〜60 秒ほどかかることがあります');
+  try {
+    const res = await fetch('/api/send-now', {method:'POST'});
+    if(!res.ok){
+      document.getElementById('dashOut').textContent = '失敗: ' + await res.text();
+      return;
+    }
+    const data = await res.json();
+    _renderSourceBadges(data.menus || []);
+    document.getElementById('dashOut').textContent = data.rendered + '\\n\\n(送信しました)';
+  } finally {
+    _setDashBusy(false);
+  }
 }
 function escapeHtml(s){ return String(s).replace(/[&<>\"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\\'':'&#39;' })[c]); }
 
