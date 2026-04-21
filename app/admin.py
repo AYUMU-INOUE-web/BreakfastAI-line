@@ -79,6 +79,12 @@ INDEX_HTML = """
   button.primary{background:var(--accent);color:#fff;border:0;padding:10px 16px;border-radius:4px;font-size:14px;cursor:pointer;}
   button.secondary{background:#fff;color:var(--fg);border:1px solid var(--border);padding:10px 16px;border-radius:4px;font-size:14px;cursor:pointer;}
   button.danger{background:#fff;color:#c43;border:1px solid #f0cfc5;padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;}
+  button.small{padding:4px 10px;font-size:12px;border-radius:4px;cursor:pointer;}
+  button.small.primary{background:var(--accent);color:#fff;border:0;}
+  button.small.secondary{background:#fff;color:var(--fg);border:1px solid var(--border);}
+  td.edit input,td.edit select{width:100%;padding:4px;font-size:12px;border:1px solid var(--border);border-radius:3px;box-sizing:border-box;}
+  td.edit .range{display:flex;gap:2px;align-items:center;}
+  td.edit .range input{width:50%;}
   .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
   pre.preview{background:#f9f6ef;border:1px solid var(--border);border-radius:4px;padding:14px;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.7;}
   .muted{color:var(--muted);font-size:12px;}
@@ -185,21 +191,63 @@ async function loadIngredients(){
   const tbody = document.querySelector('#ingredients tbody');
   tbody.innerHTML = '';
   for(const ing of data){
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${escapeHtml(ing.name)}</td>` +
-      `<td>${CATEGORY_LABEL[ing.category] || ing.category}</td>` +
-      `<td>${ing.calories_per_unit}</td>` +
-      `<td>${ing.default_portion}${escapeHtml(ing.unit)}</td>` +
-      `<td>${ing.min_portion}〜${ing.max_portion}${escapeHtml(ing.unit)}</td>` +
-      `<td><span class=\"badge ${ing.active?'':'inactive'}\">${ing.active?'有効':'無効'}</span></td>` +
-      `<td><button data-id=\"${ing.id}\" class=\"danger\">削除</button></td>`;
-    tbody.appendChild(tr);
+    tbody.appendChild(renderViewRow(ing));
   }
-  tbody.querySelectorAll('button.danger').forEach(b => b.onclick = async () => {
-    if(!confirm('削除しますか?')) return;
-    await fetch('/api/ingredients/' + b.dataset.id, {method:'DELETE'});
-    loadIngredients();
-  });
+}
+
+function renderViewRow(ing){
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${escapeHtml(ing.name)}</td>` +
+    `<td>${CATEGORY_LABEL[ing.category] || ing.category}</td>` +
+    `<td>${ing.calories_per_unit}</td>` +
+    `<td>${ing.default_portion}${escapeHtml(ing.unit)}</td>` +
+    `<td>${ing.min_portion}〜${ing.max_portion}${escapeHtml(ing.unit)}</td>` +
+    `<td><span class="badge ${ing.active?'':'inactive'}">${ing.active?'有効':'無効'}</span></td>` +
+    `<td><button class="small secondary" data-act="edit">編集</button> <button class="danger" data-act="delete">削除</button></td>`;
+  tr.querySelector('[data-act=edit]').onclick = () => tr.replaceWith(renderEditRow(ing));
+  tr.querySelector('[data-act=delete]').onclick = async () => {
+    if(!confirm(`${ing.name} を削除しますか?`)) return;
+    const res = await fetch('/api/ingredients/' + ing.id, {method:'DELETE'});
+    if(res.ok) loadIngredients();
+    else alert('削除失敗: ' + await res.text());
+  };
+  return tr;
+}
+
+function renderEditRow(ing){
+  const tr = document.createElement('tr');
+  const catOptions = ['main','protein','side','drink']
+    .map(c => `<option value="${c}" ${c===ing.category?'selected':''}>${CATEGORY_LABEL[c]}</option>`)
+    .join('');
+  tr.innerHTML = `
+    <td class="edit"><input name="name" value="${escapeHtml(ing.name)}"></td>
+    <td class="edit"><select name="category">${catOptions}</select></td>
+    <td class="edit"><input name="calories_per_unit" type="number" step="0.01" value="${ing.calories_per_unit}"></td>
+    <td class="edit"><div class="range"><input name="default_portion" type="number" step="0.1" value="${ing.default_portion}"><input name="unit" value="${escapeHtml(ing.unit)}" style="width:40%"></div></td>
+    <td class="edit"><div class="range"><input name="min_portion" type="number" step="0.1" value="${ing.min_portion}"><span>〜</span><input name="max_portion" type="number" step="0.1" value="${ing.max_portion}"></div></td>
+    <td class="edit"><label style="font-size:12px;"><input type="checkbox" name="active" ${ing.active?'checked':''}> 有効</label></td>
+    <td><button class="small primary" data-act="save">保存</button> <button class="small secondary" data-act="cancel">取消</button></td>
+  `;
+  tr.querySelector('[data-act=save]').onclick = async () => {
+    const get = (n) => tr.querySelector(`[name="${n}"]`);
+    const body = {
+      name: get('name').value.trim(),
+      category: get('category').value,
+      unit: get('unit').value.trim(),
+      calories_per_unit: Number(get('calories_per_unit').value),
+      default_portion: Number(get('default_portion').value),
+      min_portion: Number(get('min_portion').value),
+      max_portion: Number(get('max_portion').value),
+      active: get('active').checked,
+    };
+    const res = await fetch('/api/ingredients/' + ing.id, {
+      method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    if(res.ok) loadIngredients();
+    else alert('保存失敗: ' + await res.text());
+  };
+  tr.querySelector('[data-act=cancel]').onclick = () => tr.replaceWith(renderViewRow(ing));
+  return tr;
 }
 document.getElementById('addForm').onsubmit = async (e) => {
   e.preventDefault();
