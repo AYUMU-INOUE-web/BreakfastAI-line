@@ -1,0 +1,33 @@
+name: Daily breakfast menu
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 22 * * *'  # UTC 22:00 = JST 翌 07:00
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Seed ingredients
+        env:
+          DATABASE_URL: sqlite:///breakfast.db
+        run: python main.py seed
+
+      - name: Send today's menu to LINE
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          DATABASE_URL: sqlite:///breakfast.db
+          TIMEZONE: Asia/Tokyo
+        run: python main.py send-now
