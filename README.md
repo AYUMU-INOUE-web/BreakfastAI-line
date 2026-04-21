@@ -10,6 +10,7 @@
 - 生成に失敗した場合はプロファイル別の **固定代替メニュー** を配信
 - **配信テンプレートを Web UI から編集可能**(Jinja2, `menus` で2人分をループ)
 - 食材の追加 / 編集 / 削除を Web UI から操作可能
+- **AI(Claude)による料理提案**: 手持ちの食材から作れる朝食候補を提案し、ワンクリックで登録可能
 - 管理画面 (Flask) からプレビュー / 即時送信が可能
 
 ## 構成
@@ -121,6 +122,7 @@ curl -X POST http://localhost:5000/api/ingredients \
 | `LINE_USER_ID` | 配信先の userId / groupId | ✅ |
 | `CRON_SECRET` | 任意のランダム文字列(Cron エンドポイント保護) | ✅ |
 | `ADMIN_PASSWORD` | 管理 UI にかけたい Basic 認証パスワード | 任意 |
+| `ANTHROPIC_API_KEY` | Claude API キー(AI 料理提案タブを使う場合) | 任意 |
 | `TIMEZONE` | `Asia/Tokyo` | 任意 |
 | `AUTO_SEED` | `1`(初回にサンプル食材を自動投入) | 任意 |
 
@@ -182,6 +184,8 @@ Vercel Cron が定時配信を引き受けるので、以下のワークフロ�
 | `ADMIN_PASSWORD` | (空) | Basic 認証パスワード(空なら認証なし) |
 | `CRON_SECRET` | (空) | `/api/cron/send` エンドポイントの Bearer 認証 |
 | `AUTO_SEED` | `1` | 空DBに対し初回のみサンプル食材を投入 |
+| `ANTHROPIC_API_KEY` | (空) | 設定すると AI 料理提案タブが有効化される |
+| `AI_MODEL` | `claude-opus-4-7` | 料理提案で使う Claude モデル ID |
 
 ## テスト
 

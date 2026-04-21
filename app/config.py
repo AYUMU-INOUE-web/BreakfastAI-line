@@ -21,6 +21,9 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 CRON_SECRET = os.getenv("CRON_SECRET", "")
 # 空のDBに対してサンプル食材を自動投入するか(Vercel初回デプロイ向け)
 AUTO_SEED = os.getenv("AUTO_SEED", "1") == "1"
+# Anthropic Claude API 連携(料理提案機能)。空なら提案 UI は無効化
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+AI_MODEL = os.getenv("AI_MODEL", "claude-opus-4-7")
 
 CALORIE_TARGET = 700
 CALORIE_MIN = 650

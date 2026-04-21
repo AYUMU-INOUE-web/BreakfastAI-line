@@ -23,6 +23,7 @@ import hmac
 
 from flask import Flask, Response, jsonify, render_template_string, request
 
+from app.ai_suggester import AISuggesterUnavailableError, is_available as ai_is_available, suggest_dishes
 from app.config import ADMIN_PASSWORD, AUTO_SEED, CRON_SECRET
 from app.database import init_db, session_scope
 from app.line_notifier import send_breakfast
@@ -101,6 +102,7 @@ INDEX_HTML = """
 <nav>
   <button data-tab=\"dashboard\" class=\"active\">ダッシュボード</button>
   <button data-tab=\"ingredients\">食材</button>
+  <button data-tab=\"ai\">AI提案</button>
   <button data-tab=\"template\">テンプレート</button>
 </nav>
 <main>
@@ -149,6 +151,20 @@ INDEX_HTML = """
   </div>
 </section>
 
+<section id=\"sec-ai\">
+  <div class=\"card\">
+    <h2>AI 料理提案</h2>
+    <p class=\"muted\">登録済み食材を元に、Claude が簡単な朝食料理を提案します。良さそうなものは「食材として登録」で反映できます。</p>
+    <div class=\"row\" style=\"grid-template-columns:1fr auto auto;\">
+      <input id=\"aiExtra\" placeholder=\"追加食材(例: 梅干し, しゃけ) カンマ区切り・任意\">
+      <input id=\"aiCount\" type=\"number\" min=\"1\" max=\"10\" value=\"5\" style=\"width:80px\">
+      <button class=\"primary\" onclick=\"aiSuggest()\">提案する</button>
+    </div>
+    <p class=\"muted\" id=\"aiStatus\"></p>
+  </div>
+  <div id=\"aiResults\"></div>
+</section>
+
 <section id=\"sec-template\">
   <div class=\"card\">
     <h2>配信テンプレートの編集</h2>
@@ -181,6 +197,7 @@ tabs.forEach(b => b.onclick = () => {
   document.getElementById('sec-' + b.dataset.tab).classList.add('active');
   if(b.dataset.tab === 'template') loadTemplate();
   if(b.dataset.tab === 'ingredients') loadIngredients();
+  if(b.dataset.tab === 'ai') checkAiStatus();
 });
 
 const CATEGORY_LABEL = {main:'主食',protein:'たんぱく',side:'副菜',drink:'飲み物'};
@@ -298,6 +315,75 @@ async function sendNow(){
   document.getElementById('dashOut').textContent = data.rendered + '\\n\\n(送信しました)';
 }
 function escapeHtml(s){ return String(s).replace(/[&<>\"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\\'':'&#39;' })[c]); }
+
+async function checkAiStatus(){
+  const res = await fetch('/api/ai/status');
+  const data = await res.json();
+  const el = document.getElementById('aiStatus');
+  if(!data.available){
+    el.textContent = '⚠️ ANTHROPIC_API_KEY が未設定です。Vercel の Environment Variables で登録してください。';
+    el.style.color = '#c43';
+  } else {
+    el.textContent = '';
+  }
+}
+async function aiSuggest(){
+  const extraRaw = document.getElementById('aiExtra').value.trim();
+  const n = Number(document.getElementById('aiCount').value || 5);
+  let ingredients = null;
+  if(extraRaw){
+    // 追加入力があれば、既存食材 + 追加食材をマージして渡す
+    const existing = await (await fetch('/api/ingredients')).json();
+    const extra = extraRaw.split(/[,\\u3001]/).map(s => s.trim()).filter(Boolean);
+    ingredients = [...existing.map(i => i.name), ...extra];
+  }
+  const results = document.getElementById('aiResults');
+  results.innerHTML = '<div class=\"card muted\">提案中...</div>';
+  const res = await fetch('/api/ai/suggest', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ingredients, n}),
+  });
+  if(!res.ok){
+    results.innerHTML = `<div class=\"card\" style=\"color:#c43\">失敗: ${escapeHtml(await res.text())}</div>`;
+    return;
+  }
+  const data = await res.json();
+  if(!data.dishes || data.dishes.length === 0){
+    results.innerHTML = '<div class=\"card muted\">提案が得られませんでした。</div>';
+    return;
+  }
+  results.innerHTML = '';
+  for(const dish of data.dishes){
+    const card = document.createElement('div');
+    card.className = 'card';
+    const uses = (dish.uses_ingredients || []).map(escapeHtml).join(', ');
+    card.innerHTML = `
+      <div style=\"display:flex;justify-content:space-between;align-items:baseline;gap:8px;\">
+        <strong>${escapeHtml(dish.name)}</strong>
+        <span class=\"badge\">${CATEGORY_LABEL[dish.category] || dish.category}</span>
+      </div>
+      <div class=\"muted\" style=\"margin:4px 0 8px;\">${escapeHtml(dish.description || '')}</div>
+      <div style=\"font-size:12px;color:#555;\">使う食材: ${uses || '—'}</div>
+      <div style=\"font-size:12px;color:#555;\">目安: ${dish.default_portion}${escapeHtml(dish.unit)} / ${dish.calories_per_unit} kcal/単位 (${dish.min_portion}〜${dish.max_portion}${escapeHtml(dish.unit)})</div>
+      <div class=\"actions\"><button class=\"small primary\">食材として登録</button></div>
+    `;
+    card.querySelector('button').onclick = async () => {
+      const body = {
+        name: dish.name,
+        category: dish.category,
+        unit: dish.unit,
+        calories_per_unit: Number(dish.calories_per_unit),
+        default_portion: Number(dish.default_portion),
+        min_portion: Number(dish.min_portion),
+        max_portion: Number(dish.max_portion),
+      };
+      const r = await fetch('/api/ingredients', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+      if(r.ok){ card.querySelector('button').disabled = true; card.querySelector('button').textContent = '登録済み'; }
+      else { alert('登録失敗: ' + await r.text()); }
+    };
+    results.appendChild(card);
+  }
+}
 loadIngredients();
 </script>
 </body></html>
@@ -501,6 +587,34 @@ def create_app() -> Flask:
             "menus": [m.to_payload() for m in menus],
             "rendered": render(body, menus),
         })
+
+    # ---- AI 料理提案 ----
+    @app.get("/api/ai/status")
+    def ai_status():
+        return jsonify({"available": ai_is_available()})
+
+    @app.post("/api/ai/suggest")
+    def ai_suggest():
+        payload = request.get_json(force=True) or {}
+        ingredients = payload.get("ingredients")
+        n = int(payload.get("n", 5))
+        if ingredients is None:
+            # 省略時は登録済みの active 食材名を使う
+            with session_scope() as s:
+                ingredients = [
+                    name for (name,) in s.query(Ingredient.name)
+                    .filter(Ingredient.active.is_(True))
+                    .all()
+                ]
+        if not isinstance(ingredients, list):
+            return "ingredients must be an array of strings", 400
+        try:
+            dishes = suggest_dishes(ingredients, n=n)
+        except AISuggesterUnavailableError as exc:
+            return str(exc), 503
+        except Exception as exc:  # noqa: BLE001
+            return f"AI suggestion failed: {exc}", 502
+        return jsonify({"dishes": dishes})
 
     # ---- Vercel Cron からの定時配信 ----
     @app.route("/api/cron/send", methods=["GET", "POST"])
