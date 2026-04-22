@@ -44,9 +44,10 @@ def test_300kcal_profile_respects_its_range(populated_session):
 
 def test_generate_menu_falls_back_when_no_ingredients(session):
     menus = generate_breakfast(session, today=date(2026, 4, 21))
+    # 登録素材が無ければ空の fallback メニュー(未登録の既定料理は使わない)
     assert all(m.is_fallback for m in menus)
-    for m, p in zip(menus, DEFAULT_PROFILES):
-        assert m.menu_name == p.fallback_name
+    assert all(m.items == [] for m in menus)
+    assert all("献立が組めませんでした" in m.menu_name for m in menus)
 
 
 def test_generate_menu_falls_back_when_category_missing(session):
@@ -104,8 +105,9 @@ def test_save_history_persists_all_menus(populated_session):
         assert len(items) == len(menu.items)
 
 
-def test_fallback_menus_have_reasonable_calories():
+def test_fallback_metadata_still_defines_backup_items():
+    # fallback_items はプロファイルに残っているが、runtime では使われない。
+    # (将来的な手動参照用に残す)
     for profile in DEFAULT_PROFILES:
-        total = sum(c for (_, _, _, c) in profile.fallback_items)
-        # 許容範囲にぴったりでなくても良いが、ターゲット ±40% には収まる
-        assert abs(total - profile.target) <= profile.target * 0.4
+        assert profile.fallback_items is not None
+        assert profile.fallback_name

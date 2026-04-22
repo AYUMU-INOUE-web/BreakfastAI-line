@@ -28,13 +28,16 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "あなたは家庭の朝食を得意とする料理アシスタントです。"
-    "ユーザーが持っている素材(食材)から、現実的に作れる朝食の献立を組み立てます。"
-    "出力は必ず submit_menu ツールで返してください。"
-    "・料理は日本の家庭で毎朝作るような、現実的で簡単なものに限る\n"
+    "ユーザーが登録した素材だけを使って、現実的に作れる朝食の献立を組み立てます。"
+    "出力は必ず submit_menu ツールで返してください。\n\n"
+    "重要なルール:\n"
+    "・**登録素材リストに無いものは、調味料(塩・しょうゆ・砂糖・油 等)・水・氷も含めて一切使ってはいけない**\n"
+    "・各料理の ingredients_used には、使う素材の名前を**登録素材リストと完全に同じ文字列**で記載する\n"
+    "・登録素材だけでは作れない料理は絶対に提案しない(作れないなら料理数を減らしてよい)\n"
+    "・料理は日本の家庭で朝に作るような現実的で簡単なものに限る\n"
     "・各料理は 1 人分の分量・概算カロリーを含める\n"
-    "・ごく一般的な調味料(塩、しょうゆ、砂糖、油など)は、素材に載っていなくても使ってよい\n"
     "・料理の合計カロリーが、指定されたターゲットの許容範囲に収まるようにする\n"
-    "・1 献立は 2〜5 品で構成し、主食・主菜・副菜・飲み物がバランスよく入るとよい\n"
+    "・1 献立は 1〜5 品で構成する(素材が乏しいときは少なくてよい)\n"
     "・直近で提供した献立と同じ構成にならないようにする\n"
     "・すべて日本語で記述する"
 )
@@ -218,18 +221,32 @@ def generate_ai_menu(
         description = str(d.get("description") or "").strip()
         raw_used = d.get("ingredients_used") or []
         used_clean: list[dict] = []
+        unknown_in_dish: list[str] = []
         if isinstance(raw_used, list):
             for u in raw_used:
                 if not isinstance(u, dict):
                     continue
+                used_name = str(u.get("name") or "").strip()
+                if used_name and used_name not in by_name:
+                    unknown_in_dish.append(used_name)
                 used_clean.append(
                     {
-                        "name": str(u.get("name") or "").strip(),
+                        "name": used_name,
                         "portion": float(u.get("portion", 0) or 0),
                         "unit": str(u.get("unit") or "").strip(),
                     }
                 )
         if not name or calories <= 0 or portion <= 0:
+            continue
+        # 厳密チェック: 登録素材リストに無い素材が含まれている料理は不採用
+        if unknown_in_dish:
+            logger.info(
+                "Dropping AI dish %r: uses unregistered ingredient(s) %s",
+                name, unknown_in_dish,
+            )
+            continue
+        if not used_clean:
+            logger.info("Dropping AI dish %r: no ingredients declared", name)
             continue
 
         # 最初に使われた素材の id を残しておく(履歴との多少の紐付け用)

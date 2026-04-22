@@ -8,7 +8,7 @@ LINE_USER_ID = os.getenv("LINE_USER_ID", "")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///breakfast.db")
 
-NOTIFY_HOUR = int(os.getenv("NOTIFY_HOUR", "7"))
+NOTIFY_HOUR = int(os.getenv("NOTIFY_HOUR", "6"))
 NOTIFY_MINUTE = int(os.getenv("NOTIFY_MINUTE", "0"))
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Tokyo")
 

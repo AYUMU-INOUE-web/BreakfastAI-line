@@ -129,6 +129,68 @@ def test_generate_ai_menu_returns_none_without_ingredients(monkeypatch):
     assert ai_suggester.generate_ai_menu(s, DEFAULT_PROFILES[0]) is None
 
 
+def test_generate_ai_menu_drops_dishes_with_unregistered_ingredients(ai_session):
+    """AI が登録外の素材(例: しょうゆ)を使った料理は採用されない。"""
+    session, ai_suggester = ai_session
+    dishes = [
+        {
+            "name": "OK料理",
+            "portion": 1, "unit": "皿", "calories": 100,
+            "ingredients_used": [{"name": "卵", "portion": 1, "unit": "個"}],
+            "description": "",
+        },
+        {
+            "name": "NG料理",
+            "portion": 1, "unit": "皿", "calories": 100,
+            "ingredients_used": [
+                {"name": "卵", "portion": 1, "unit": "個"},
+                {"name": "しょうゆ", "portion": 5, "unit": "ml"},  # 未登録
+            ],
+            "description": "",
+        },
+    ]
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return _tool_response("mix", dishes)
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            self.messages = FakeMessages()
+
+    with patch.object(ai_suggester.anthropic, "Anthropic", FakeClient):
+        menu = ai_suggester.generate_ai_menu(session, DEFAULT_PROFILES[0])
+
+    assert menu is not None
+    assert [i.name for i in menu.items] == ["OK料理"]
+
+
+def test_generate_ai_menu_returns_none_if_all_dishes_have_unregistered(ai_session):
+    session, ai_suggester = ai_session
+    dishes = [
+        {
+            "name": "NG",
+            "portion": 1, "unit": "皿", "calories": 100,
+            "ingredients_used": [{"name": "しょうゆ", "portion": 5, "unit": "ml"}],
+            "description": "",
+        }
+    ]
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return _tool_response("all ng", dishes)
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            self.messages = FakeMessages()
+
+    with patch.object(ai_suggester.anthropic, "Anthropic", FakeClient):
+        menu = ai_suggester.generate_ai_menu(session, DEFAULT_PROFILES[0])
+
+    # 有効料理が 0 件になるので None
+    assert menu is None
+
+
 def test_generate_ai_menu_handles_api_error(ai_session):
     session, ai_suggester = ai_session
 
@@ -154,11 +216,14 @@ def test_generate_breakfast_uses_ai_then_falls_back(populated_session, monkeypat
     importlib.reload(ai_suggester)
     importlib.reload(menu_generator)
 
+    # populated_session は 食パン/ごはん/ゆで卵/ヨーグルト/バナナ/サラダ/牛乳/コーヒー を持つ
     dishes = [
-        {"name": "しゃけ茶漬け", "portion": 1, "unit": "杯", "calories": 500,
-         "ingredients_used": [], "description": ""},
-        {"name": "ヨーグルト", "portion": 100, "unit": "g", "calories": 200,
-         "ingredients_used": [], "description": ""},
+        {"name": "トースト", "portion": 1, "unit": "枚", "calories": 160,
+         "ingredients_used": [{"name": "食パン", "portion": 1, "unit": "枚"}],
+         "description": "パンを焼く"},
+        {"name": "ヨーグルト", "portion": 100, "unit": "g", "calories": 62,
+         "ingredients_used": [{"name": "ヨーグルト", "portion": 100, "unit": "g"}],
+         "description": "そのまま"},
     ]
 
     call_count = {"n": 0}
@@ -182,7 +247,7 @@ def test_generate_breakfast_uses_ai_then_falls_back(populated_session, monkeypat
     # 700kcal は AI 結果(menu_name が "AI 献立", dish 単位)
     assert menus[0].profile_name == "700kcal"
     assert menus[0].menu_name == "AI 献立"
-    assert menus[0].items[0].name == "しゃけ茶漬け"
+    assert menus[0].items[0].name == "トースト"
     # 300kcal は AI 失敗 → ルールベース(カテゴリ由来の名前になる)
     assert menus[1].profile_name == "300kcal"
     assert menus[1].menu_name != "AI 献立"

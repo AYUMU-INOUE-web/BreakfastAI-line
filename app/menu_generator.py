@@ -161,12 +161,12 @@ def _group_by_category(ingredients: Iterable[Ingredient]) -> dict[str, list[Ingr
 
 
 def _fallback(profile: MenuProfile) -> GeneratedMenu:
-    items = [MenuItem(None, n, p, u, c) for (n, p, u, c) in profile.fallback_items]
-    total = sum(i.calories for i in items)
+    # 登録素材だけで献立が組めない場合は、未登録素材を含む定型メニューは送らない。
+    # 代わりに空の is_fallback メニューを返してユーザーに素材追加を促す。
     return GeneratedMenu(
-        menu_name=profile.fallback_name,
-        items=items,
-        total_calories=total,
+        menu_name="登録済みの食材だけでは献立が組めませんでした(素材を追加してください)",
+        items=[],
+        total_calories=0,
         is_fallback=True,
         profile_name=profile.name,
     )
