@@ -33,36 +33,57 @@ LANDING_HTML = """
 <head>
 <meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-<title>家族の自動化</title>
+<title>AIオカン</title>
 <style>
-  body{font-family:system-ui,-apple-system,\"Hiragino Kaku Gothic ProN\",sans-serif;margin:0;background:#fafaf7;color:#222;min-height:100vh;display:flex;flex-direction:column;}
-  header{background:#fff;border-bottom:1px solid #e0ddd5;padding:18px 20px;}
-  header h1{margin:0;font-size:18px;}
-  main{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;width:100%;max-width:720px;}
-  a.card{display:block;background:#fff;border:1px solid #e0ddd5;border-radius:12px;padding:28px 24px;text-decoration:none;color:#222;transition:transform 0.1s, box-shadow 0.1s;}
-  a.card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,0.06);}
-  a.card .emoji{font-size:48px;margin-bottom:8px;}
+  :root{--bg:#fdf7eb;--card:#fff;--fg:#3a2e22;--muted:#7a6a5a;--border:#e8dcc8;--accent:#d94876;--accent-soft:#fce3ec;--purple:#b49ed4;--tech:#6dbfd6;}
+  *{box-sizing:border-box;}
+  body{font-family:system-ui,-apple-system,\"Hiragino Kaku Gothic ProN\",\"Hiragino Maru Gothic ProN\",sans-serif;margin:0;background:var(--bg);color:var(--fg);min-height:100vh;display:flex;flex-direction:column;
+    background-image:radial-gradient(circle at 90% 0%, #fce3ec 0%, transparent 40%), radial-gradient(circle at 0% 100%, #e7dcee 0%, transparent 40%);
+  }
+  header{padding:24px 20px 0;text-align:center;}
+  .logo{display:inline-flex;align-items:baseline;gap:4px;font-weight:700;font-size:22px;}
+  .logo .ai{color:var(--accent);letter-spacing:0.5px;}
+  main{flex:1;padding:16px 16px 48px;}
+  .hero{max-width:720px;margin:0 auto;text-align:center;}
+  .avatar{width:min(280px,70vw);aspect-ratio:1/1;margin:8px auto 16px;border-radius:50%;overflow:hidden;background:linear-gradient(135deg,#fce3ec 0%,#e7dcee 100%);box-shadow:0 12px 30px -10px rgba(217,72,118,0.25);position:relative;}
+  .avatar img{width:100%;height:100%;object-fit:cover;display:block;}
+  .avatar.no-image::after{content:\"👩🏻‍🍳\";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:min(120px,30vw);}
+  h1{margin:8px 0 4px;font-size:28px;letter-spacing:0.5px;}
+  h1 .ai{color:var(--accent);}
+  .tagline{color:var(--muted);margin:0 0 24px;font-size:14px;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;max-width:720px;margin:24px auto 0;}
+  a.card{display:block;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;text-decoration:none;color:var(--fg);transition:transform 0.1s,box-shadow 0.15s;text-align:left;}
+  a.card:hover{transform:translateY(-3px);box-shadow:0 10px 24px -8px rgba(58,46,34,0.15);}
+  a.card .emoji{font-size:40px;margin-bottom:8px;}
   a.card h2{margin:0 0 6px;font-size:18px;}
-  a.card p{margin:0;color:#666;font-size:13px;line-height:1.6;}
+  a.card p{margin:0;color:var(--muted);font-size:13px;line-height:1.6;}
+  a.card.breakfast{border-top:4px solid var(--accent);}
+  a.card.cleaning{border-top:4px solid var(--purple);}
+  footer{text-align:center;padding:16px;color:var(--muted);font-size:12px;}
 </style>
 </head>
 <body>
-<header><h1>🏠 家族の自動化</h1></header>
+<header><span class=\"logo\"><span class=\"ai\">AI</span>オカン</span></header>
 <main>
+  <section class=\"hero\">
+    <div class=\"avatar\" id=\"avatar\"><img src=\"/static/ai-okan.png\" alt=\"AIオカン\" onerror=\"document.getElementById('avatar').classList.add('no-image');this.style.display='none';\"></div>
+    <h1><span class=\"ai\">AI</span>オカン</h1>
+    <p class=\"tagline\">先端技術で「小言」が最適化される — 朝ごはんも掃除も、オカンにおまかせ 🍳🧹</p>
+  </section>
   <div class=\"grid\">
-    <a class=\"card\" href=\"/breakfast\">
+    <a class=\"card breakfast\" href=\"/breakfast\">
       <div class=\"emoji\">🍳</div>
-      <h2>朝ごはん</h2>
-      <p>素材の登録と、毎朝 7:00 の LINE 配信管理</p>
+      <h2>オカンの朝ごはん</h2>
+      <p>素材を登録しとけば、毎朝 6:00 に AI オカンが献立を LINE で送ってくれるで。</p>
     </a>
-    <a class=\"card\" href=\"/cleaning\">
+    <a class=\"card cleaning\" href=\"/cleaning\">
       <div class=\"emoji\">🧹</div>
-      <h2>掃除当番</h2>
-      <p>担当者と場所の登録、毎週土曜 8:00 の割り当て配信</p>
+      <h2>オカンの掃除当番</h2>
+      <p>担当者と場所を登録したら、毎週土曜 8:00 に AI オカンがランダムで割り振るわ。</p>
     </a>
   </div>
 </main>
+<footer>愛情ベース: 100% 💗</footer>
 </body></html>
 """
 
@@ -72,13 +93,18 @@ INDEX_HTML = """
 <head>
 <meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-<title>朝ごはん献立 管理</title>
+<title>AIオカン — 朝ごはん</title>
 <style>
-  :root { --bg:#fafaf7; --fg:#222; --muted:#666; --accent:#ff8a4c; --border:#e0ddd5; }
+  :root { --bg:#fdf7eb; --fg:#3a2e22; --muted:#7a6a5a; --accent:#d94876; --accent-soft:#fce3ec; --purple:#b49ed4; --border:#e8dcc8; }
   *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,\"Hiragino Kaku Gothic ProN\",sans-serif;margin:0;background:var(--bg);color:var(--fg);}
-  header{background:#fff;border-bottom:1px solid var(--border);padding:16px 20px;}
-  header h1{margin:0;font-size:18px;}
+  body{font-family:system-ui,-apple-system,\"Hiragino Kaku Gothic ProN\",\"Hiragino Maru Gothic ProN\",sans-serif;margin:0;background:var(--bg);color:var(--fg);}
+  header{background:#fff;border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;gap:12px;}
+  header .avatar{width:44px;height:44px;border-radius:50%;overflow:hidden;background:linear-gradient(135deg,#fce3ec,#e7dcee);flex:0 0 auto;position:relative;}
+  header .avatar img{width:100%;height:100%;object-fit:cover;display:block;}
+  header .avatar.no-image::after{content:\"👩🏻\";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:24px;}
+  header h1{margin:0;font-size:16px;flex:1;}
+  header h1 .ai{color:var(--accent);font-weight:700;}
+  header a.home{color:var(--muted);text-decoration:none;font-size:13px;}
   nav{background:#fff;border-bottom:1px solid var(--border);display:flex;}
   nav button{background:none;border:0;padding:14px 20px;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:3px solid transparent;}
   nav button.active{color:var(--accent);border-color:var(--accent);font-weight:600;}
@@ -101,9 +127,9 @@ INDEX_HTML = """
   button[disabled]{opacity:0.5;cursor:not-allowed;}
   .spinner{display:inline-block;width:14px;height:14px;border:2px solid #eee;border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:8px;}
   @keyframes spin{to{transform:rotate(360deg);}}
-  .loading{display:flex;align-items:center;gap:8px;padding:14px;background:#fff7ef;border:1px solid #f5d9b8;border-radius:4px;font-size:13px;margin-top:12px;}
+  .loading{display:flex;align-items:center;gap:8px;padding:14px;background:var(--accent-soft);border:1px solid #f4c0d2;border-radius:8px;font-size:13px;margin-top:12px;color:#8a2d4e;}
   .loading .sub{color:var(--muted);font-size:12px;}
-  .source-ai{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#e7f0e3;color:#365;}
+  .source-ai{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--accent-soft);color:#8a2d4e;}
   .source-rule{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#eee6d9;color:#6c5a3d;}
   button.small.primary{background:var(--accent);color:#fff;border:0;}
   button.small.secondary{background:#fff;color:var(--fg);border:1px solid var(--border);}
@@ -122,7 +148,11 @@ INDEX_HTML = """
 </style>
 </head>
 <body>
-<header><h1>🍳 朝ごはん献立 管理 <a href=\"/\" style=\"font-size:13px;color:#666;margin-left:12px;text-decoration:none;\">← トップへ</a></h1></header>
+<header>
+  <div class=\"avatar\" id=\"hAvatar\"><img src=\"/static/ai-okan.png\" alt=\"AIオカン\" onerror=\"document.getElementById('hAvatar').classList.add('no-image');this.style.display='none';\"></div>
+  <h1><span class=\"ai\">AI</span>オカンの朝ごはん 🍳</h1>
+  <a class=\"home\" href=\"/\">← トップ</a>
+</header>
 <nav>
   <button data-tab=\"dashboard\" class=\"active\">ダッシュボード</button>
   <button data-tab=\"ingredients\">食材</button>
@@ -335,10 +365,10 @@ async function updateAiBadge(){
   const el = document.getElementById('aiBadge');
   if(!el) return;
   if(data.available){
-    el.textContent = '🤖 AI による献立生成: 有効';
-    el.style.color = '#365';
+    el.textContent = '🤖 AIオカンが考えてくれるで(AI 有効)';
+    el.style.color = '#8a2d4e';
   } else {
-    el.textContent = '⚠️ ANTHROPIC_API_KEY 未設定 — ルールベース生成で動作中';
+    el.textContent = '⚠️ ANTHROPIC_API_KEY 未設定 — ルールベースで動作中';
     el.style.color = '#c43';
   }
 }
@@ -355,13 +385,17 @@ CLEANING_HTML = """
 <head>
 <meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-<title>掃除当番 管理</title>
+<title>AIオカン — 掃除当番</title>
 <style>
-  :root { --bg:#fafaf7; --fg:#222; --muted:#666; --accent:#5ab0a8; --border:#e0ddd5; }
+  :root { --bg:#fdf7eb; --fg:#3a2e22; --muted:#7a6a5a; --accent:#8e74c4; --accent-soft:#ece3f6; --pink:#d94876; --border:#e8dcc8; }
   *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,\"Hiragino Kaku Gothic ProN\",sans-serif;margin:0;background:var(--bg);color:var(--fg);}
-  header{background:#fff;border-bottom:1px solid var(--border);padding:16px 20px;display:flex;align-items:center;gap:12px;}
-  header h1{margin:0;font-size:18px;flex:1;}
+  body{font-family:system-ui,-apple-system,\"Hiragino Kaku Gothic ProN\",\"Hiragino Maru Gothic ProN\",sans-serif;margin:0;background:var(--bg);color:var(--fg);}
+  header{background:#fff;border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;gap:12px;}
+  header .avatar{width:44px;height:44px;border-radius:50%;overflow:hidden;background:linear-gradient(135deg,#ece3f6,#fce3ec);flex:0 0 auto;position:relative;}
+  header .avatar img{width:100%;height:100%;object-fit:cover;display:block;}
+  header .avatar.no-image::after{content:\"👩🏻\";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:24px;}
+  header h1{margin:0;font-size:16px;flex:1;}
+  header h1 .ai{color:var(--pink);font-weight:700;}
   header a{color:var(--muted);text-decoration:none;font-size:13px;}
   nav{background:#fff;border-bottom:1px solid var(--border);display:flex;}
   nav button{background:none;border:0;padding:14px 20px;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:3px solid transparent;}
@@ -402,8 +436,9 @@ CLEANING_HTML = """
 </head>
 <body>
 <header>
-  <h1>🧹 掃除当番 管理</h1>
-  <a href=\"/\">← トップへ</a>
+  <div class=\"avatar\" id=\"hAvatar\"><img src=\"/static/ai-okan.png\" alt=\"AIオカン\" onerror=\"document.getElementById('hAvatar').classList.add('no-image');this.style.display='none';\"></div>
+  <h1><span class=\"ai\">AI</span>オカンの掃除当番 🧹</h1>
+  <a href=\"/\">← トップ</a>
 </header>
 <nav>
   <button data-tab=\"dashboard\" class=\"active\">ダッシュボード</button>
