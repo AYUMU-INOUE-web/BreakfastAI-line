@@ -81,6 +81,8 @@ class GeneratedMenu:
     profile_name: str = ""
     # "ai" = Claude 生成 / "rule" = ルールベース生成
     source: str = "rule"
+    # AI が作った LINE 用配信テキスト。AI 生成時のみ値が入る。
+    line_text: str = ""
 
     def to_payload(self) -> dict:
         return {
@@ -90,6 +92,7 @@ class GeneratedMenu:
             "total_calories": round(self.total_calories, 1),
             "is_fallback": self.is_fallback,
             "source": self.source,
+            "line_text": self.line_text,
         }
 
     def signature(self) -> tuple:

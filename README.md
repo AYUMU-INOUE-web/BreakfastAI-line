@@ -14,7 +14,7 @@
 - **2 プロファイルを同時生成**(700kcal たっぷり / 300kcal ひかえめ)
 - プロファイルごとに直近 **3日以内と同じ献立は回避**
 - AI が使えない / 失敗した場合は **ルールベース生成** に自動フォールバック
-- **配信テンプレートを Web UI から編集可能**(Jinja2, `menus` で2人分をループ)
+- 朝ごはんは **AI が出力した文面をそのまま LINE 配信**(テンプレート編集なし)。掃除は Jinja2 テンプレ編集に対応
 - 素材の追加 / 編集 / 削除を Web UI から操作可能
 - 管理画面 (Flask) からプレビュー / 即時送信が可能
 
@@ -34,8 +34,7 @@
 │   ├── menu_generator.py     # 朝食献立生成(AI → ルールベース)
 │   ├── models.py             # Ingredient / MenuHistory / MessageTemplate / Cleaner / CleaningLocation / CleaningHistory
 │   ├── scheduler.py          # APScheduler(ローカル/VPS 運用用)
-│   ├── seed_data.py          # サンプル食材
-│   └── template_renderer.py  # Jinja2 テンプレート描画(朝ごはん用)
+│   └── seed_data.py          # サンプル食材
 ├── tests/                    # pytest
 ├── main.py                   # ローカル/CI 用エントリ (serve/send-now/seed)
 ├── vercel.json               # Vercel ルーティング + Cron 設定
@@ -63,7 +62,7 @@ python main.py serve
 ```
 
 - `http://localhost:5000/` … トップページ(朝ごはん / 掃除の 2 入口)
-- `http://localhost:5000/breakfast` … 朝ごはん管理(3 タブ: ダッシュボード / 食材 / テンプレート)
+- `http://localhost:5000/breakfast` … 朝ごはん管理(2 タブ: ダッシュボード / 食材)
 - `http://localhost:5000/cleaning` … 掃除当番管理(4 タブ: ダッシュボード / 担当者 / 場所 / テンプレート)
 - 毎朝 6:00(`NOTIFY_HOUR` で変更可)に朝ごはん LINE 配信
 - 毎週土曜 8:00(Vercel Cron)に掃除当番 LINE 配信
@@ -219,38 +218,16 @@ Vercel Cron が定時配信を引き受けるので、以下のワークフロ�
 今日も一日がんばろう!
 ```
 
-## 配信テンプレート
+## 朝ごはんの配信文面
 
-配信文面は Jinja2 テンプレートで、Web UI の **「テンプレート」タブ** から編集できます。
-保存前に構文チェックが走るので壊れたテンプレートは保存できません。
+朝ごはんは **テンプレート編集機能を持ちません**。AI が `submit_menu` ツールの
+`line_text` フィールドに、プロファイルごとの LINE 配信用テキスト(絵文字入りの
+読みやすい日本語)を書いてきます。`app/line_notifier.py::format_breakfast` は
+プロファイルごとの `line_text` を区切り線でつなぐだけで、Jinja2 による変換は
+一切行いません。
 
-利用できる変数:
-
-| 変数 | 説明 |
-| --- | --- |
-| `date` | 配信日 `YYYY-MM-DD` |
-| `menus` | 献立のリスト(既定は 700kcal / 300kcal の 2 要素) |
-| `menus[i].profile_name` | プロファイル名(例: `700kcal`) |
-| `menus[i].menu_name` | 献立の名前 |
-| `menus[i].total_calories_int` | 合計カロリー(整数) |
-| `menus[i].is_fallback` | 代替メニューかどうか |
-| `menus[i].items` | 食材リスト。各要素は `name / portion / portion_display / unit / calories / calories_int` |
-
-既定テンプレート(`app/template_renderer.py` の `DEFAULT_TEMPLATE_BODY`):
-
-```
-🍳 きょうの朝ごはん ({{ date }})
-{% for menu in menus %}
-━━━━━━━━━━━━━
-【{{ menu.profile_name }}】{% if menu.is_fallback %} (代替){% endif %}
-《{{ menu.menu_name }}》
-合計 {{ menu.total_calories_int }} kcal
-{% for item in menu.items -%}
-・{{ item.name }}: {{ item.portion_display }}{{ item.unit }} ({{ item.calories_int }} kcal)
-{% endfor %}
-{%- endfor %}
-今日も一日がんばろう!
-```
+AI が失敗した / `ANTHROPIC_API_KEY` 未設定のときはルールベース生成の結果を
+Python 側で簡易整形して送ります(`【profile】《menu_name》 合計 N kcal` 形式)。
 
 ## 掃除当番機能
 

@@ -1,21 +1,8 @@
 """管理 Web アプリ。
 
-タブ構成:
-  - ダッシュボード: プレビュー / LINE 即時送信
-  - 食材管理:    追加 / 編集 / 削除 / 有効化切替
-  - テンプレート: 配信文面の編集 + プレビュー
-
-REST API:
-  GET    /api/ingredients                一覧
-  POST   /api/ingredients                追加
-  PUT    /api/ingredients/<id>           編集
-  DELETE /api/ingredients/<id>           削除
-  GET    /api/template                   現在のアクティブテンプレ
-  PUT    /api/template                   テンプレート本文を更新
-  POST   /api/template/reset             既定に戻す
-  POST   /api/template/preview           任意の本文+サンプルデータでプレビュー
-  POST   /api/preview                    現在の食材で1献立試し生成
-  POST   /api/send-now                   生成 + LINE 配信を即時実行
+朝ごはん(/breakfast): ダッシュボード / 食材。配信文面は AI が出力したものを
+そのまま使う方針で、テンプレ編集機能は持たない。
+掃除(/cleaning): ダッシュボード / 担当者 / 場所 / テンプレート編集。
 """
 from __future__ import annotations
 
@@ -27,20 +14,10 @@ from app import cleaning as cleaning_mod
 from app.ai_suggester import is_available as ai_is_available
 from app.config import ADMIN_PASSWORD, AUTO_SEED, CRON_SECRET
 from app.database import init_db, session_scope
-from app.line_notifier import send_breakfast
+from app.line_notifier import format_breakfast, send_breakfast
 from app.menu_generator import generate_breakfast, save_history
 from app.models import Cleaner, CleaningLocation, Ingredient, MessageTemplate
 from app.seed_data import seed_default_ingredients
-from app.template_renderer import (
-    AVAILABLE_VARIABLES,
-    DEFAULT_TEMPLATE_BODY,
-    DEFAULT_TEMPLATE_NAME,
-    ensure_default_template,
-    get_active_body,
-    render,
-    sample_menus,
-    strict_render,
-)
 
 VALID_CATEGORIES = {"main", "protein", "side", "drink"}
 CATEGORY_LABEL = {
@@ -145,11 +122,10 @@ INDEX_HTML = """
 </style>
 </head>
 <body>
-<header><h1>🍳 朝ごはん献立 管理</h1></header>
+<header><h1>🍳 朝ごはん献立 管理 <a href=\"/\" style=\"font-size:13px;color:#666;margin-left:12px;text-decoration:none;\">← トップへ</a></h1></header>
 <nav>
   <button data-tab=\"dashboard\" class=\"active\">ダッシュボード</button>
   <button data-tab=\"ingredients\">食材</button>
-  <button data-tab=\"template\">テンプレート</button>
 </nav>
 <main>
 
@@ -206,27 +182,6 @@ INDEX_HTML = """
   </div>
 </section>
 
-<section id=\"sec-template\">
-  <div class=\"card\">
-    <h2>配信テンプレートの編集</h2>
-    <p class=\"muted\">Jinja2 構文で編集できます。<code>menus</code> は 700kcal / 300kcal の 2 要素配列です。保存すると次回の配信から反映されます。</p>
-    <textarea id=\"tmplBody\"></textarea>
-    <div class=\"actions\">
-      <button class=\"primary\" onclick=\"saveTemplate()\">保存</button>
-      <button class=\"secondary\" onclick=\"previewTemplate()\">プレビュー</button>
-      <button class=\"secondary\" onclick=\"resetTemplate()\">既定に戻す</button>
-    </div>
-    <div class=\"help\">
-      <strong>使える変数</strong>
-      <ul id=\"varList\" style=\"margin:6px 0 0 18px;padding:0;\"></ul>
-    </div>
-  </div>
-  <div class=\"card\">
-    <h2>プレビュー(サンプル献立で描画)</h2>
-    <pre class=\"preview\" id=\"tmplOut\">(未プレビュー)</pre>
-  </div>
-</section>
-
 </main>
 <script>
 const tabs = document.querySelectorAll('nav button');
@@ -236,7 +191,6 @@ tabs.forEach(b => b.onclick = () => {
   sections.forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   document.getElementById('sec-' + b.dataset.tab).classList.add('active');
-  if(b.dataset.tab === 'template') loadTemplate();
   if(b.dataset.tab === 'ingredients') loadIngredients();
 });
 
@@ -315,34 +269,6 @@ document.getElementById('addForm').onsubmit = async (e) => {
   if(res.ok){ e.target.reset(); loadIngredients(); } else { alert('追加失敗: ' + await res.text()); }
 };
 
-async function loadTemplate(){
-  const res = await fetch('/api/template');
-  const data = await res.json();
-  document.getElementById('tmplBody').value = data.body;
-  const ul = document.getElementById('varList');
-  ul.innerHTML = '';
-  for(const v of data.variables){
-    const li = document.createElement('li');
-    li.innerHTML = `<code>${escapeHtml(v.name)}</code> — ${escapeHtml(v.description)}`;
-    ul.appendChild(li);
-  }
-}
-async function saveTemplate(){
-  const body = document.getElementById('tmplBody').value;
-  const res = await fetch('/api/template', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({body})});
-  if(res.ok){ await previewTemplate(); alert('保存しました'); } else { alert('保存失敗: ' + await res.text()); }
-}
-async function previewTemplate(){
-  const body = document.getElementById('tmplBody').value;
-  const res = await fetch('/api/template/preview', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({body})});
-  const data = await res.json();
-  document.getElementById('tmplOut').textContent = data.preview;
-}
-async function resetTemplate(){
-  if(!confirm('テンプレートを既定に戻しますか?')) return;
-  const res = await fetch('/api/template/reset', {method:'POST'});
-  if(res.ok){ loadTemplate(); }
-}
 function _setDashBusy(busy, mainText, subText){
   const loading = document.getElementById('dashLoading');
   const btns = [document.getElementById('btnPreview'), document.getElementById('btnSendNow')];
@@ -800,7 +726,6 @@ def _bootstrap_db() -> None:
     """初回起動(or コールドスタート)時の自動初期化。"""
     init_db()
     with session_scope() as s:
-        ensure_default_template(s)
         cleaning_mod.ensure_default_cleaning_template(s)
     if AUTO_SEED:
         with session_scope() as s:
@@ -881,76 +806,14 @@ def create_app() -> Flask:
             s.delete(ing)
         return "", 204
 
-    # ---- template ----
-    @app.get("/api/template")
-    def get_template():
-        with session_scope() as s:
-            body = get_active_body(s)
-        return jsonify(
-            {
-                "body": body,
-                "variables": [{"name": n, "description": d} for n, d in AVAILABLE_VARIABLES],
-            }
-        )
-
-    @app.put("/api/template")
-    def update_template():
-        payload = request.get_json(force=True) or {}
-        body = payload.get("body")
-        if not isinstance(body, str) or not body.strip():
-            return "body must be a non-empty string", 400
-        # 保存前に構文チェック(エラーは400で返して編集中の事故を防ぐ)
-        try:
-            strict_render(body, sample_menus())
-        except Exception as exc:  # noqa: BLE001
-            return f"template render failed: {exc}", 400
-        with session_scope() as s:
-            active = (
-                s.query(MessageTemplate).filter(MessageTemplate.is_active.is_(True)).first()
-            )
-            if active is None:
-                active = MessageTemplate(name=DEFAULT_TEMPLATE_NAME, body=body, is_active=True)
-                s.add(active)
-            else:
-                active.body = body
-            s.flush()
-            return jsonify(active.to_dict())
-
-    @app.post("/api/template/reset")
-    def reset_template():
-        with session_scope() as s:
-            active = (
-                s.query(MessageTemplate).filter(MessageTemplate.is_active.is_(True)).first()
-            )
-            if active is None:
-                active = MessageTemplate(
-                    name=DEFAULT_TEMPLATE_NAME, body=DEFAULT_TEMPLATE_BODY, is_active=True
-                )
-                s.add(active)
-            else:
-                active.body = DEFAULT_TEMPLATE_BODY
-            s.flush()
-            return jsonify(active.to_dict())
-
-    @app.post("/api/template/preview")
-    def preview_template():
-        payload = request.get_json(force=True) or {}
-        body = payload.get("body") or DEFAULT_TEMPLATE_BODY
-        try:
-            rendered = strict_render(body, sample_menus())
-        except Exception as exc:  # noqa: BLE001
-            return f"render failed: {exc}", 400
-        return jsonify({"preview": rendered})
-
     # ---- menu generation / delivery ----
     @app.post("/api/preview")
     def preview_menu():
         with session_scope() as s:
             menus = generate_breakfast(s)
-            body = get_active_body(s)
         return jsonify({
             "menus": [m.to_payload() for m in menus],
-            "rendered": render(body, menus),
+            "rendered": format_breakfast(menus),
         })
 
     @app.post("/api/send-now")
@@ -958,11 +821,10 @@ def create_app() -> Flask:
         with session_scope() as s:
             menus = generate_breakfast(s)
             save_history(s, menus)
-            body = get_active_body(s)
-        send_breakfast(menus, template_body=body)
+        send_breakfast(menus)
         return jsonify({
             "menus": [m.to_payload() for m in menus],
-            "rendered": render(body, menus),
+            "rendered": format_breakfast(menus),
         })
 
     # ---- AI ステータス(UI にバッジを出すためだけに残す) ----
@@ -1211,8 +1073,7 @@ def create_app() -> Flask:
         with session_scope() as s:
             menus = generate_breakfast(s)
             save_history(s, menus)
-            body = get_active_body(s)
-        send_breakfast(menus, template_body=body)
+        send_breakfast(menus)
         return jsonify({
             "sent": True,
             "menus": [{

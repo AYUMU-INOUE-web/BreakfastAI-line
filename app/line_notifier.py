@@ -1,7 +1,13 @@
-"""LINE Messaging API への配信(2人分対応)。"""
+"""LINE Messaging API への配信。
+
+朝ごはんの文面はテンプレートを使わず、AI が出力した `line_text` をそのまま
+結合して送る。ルールベース献立や空の fallback メニューは、Python で
+シンプルに整形する(テンプレート編集なし)。
+"""
 from __future__ import annotations
 
 import logging
+from datetime import date as date_cls
 from typing import Sequence
 
 from linebot.v3.messaging import (
@@ -14,14 +20,43 @@ from linebot.v3.messaging import (
 
 from app.config import LINE_CHANNEL_ACCESS_TOKEN, LINE_USER_ID
 from app.menu_generator import GeneratedMenu
-from app.template_renderer import DEFAULT_TEMPLATE_BODY, render
 
 logger = logging.getLogger(__name__)
 
+SEPARATOR = "━━━━━━━━━━━━━"
 
-def format_breakfast(menus: Sequence[GeneratedMenu], template_body: str | None = None) -> str:
-    body = template_body if template_body is not None else DEFAULT_TEMPLATE_BODY
-    return render(body, menus)
+
+def _portion_display(value: float) -> str:
+    return f"{int(value)}" if value == int(value) else f"{value:g}"
+
+
+def _format_rule_based_block(menu: GeneratedMenu) -> str:
+    header = f"【{menu.profile_name}】" + (" (代替)" if menu.is_fallback else "")
+    lines: list[str] = [header, f"《{menu.menu_name}》"]
+    if menu.items:
+        lines.append(f"合計 {round(menu.total_calories)} kcal")
+        for item in menu.items:
+            lines.append(
+                f"・{item.name}: {_portion_display(item.portion)}{item.unit}"
+                f" ({round(item.calories)} kcal)"
+            )
+    return "\n".join(lines)
+
+
+def format_breakfast(menus: Sequence[GeneratedMenu]) -> str:
+    today = date_cls.today()
+    parts: list[str] = [f"🍳 きょうの朝ごはん ({today.isoformat()})"]
+    for menu in menus:
+        parts.append("")
+        parts.append(SEPARATOR)
+        if menu.line_text:
+            # AI が用意した LINE テキストをそのまま使う(テンプレート不使用)
+            parts.append(menu.line_text.strip())
+        else:
+            parts.append(_format_rule_based_block(menu))
+    parts.append("")
+    parts.append("今日も一日がんばろう!")
+    return "\n".join(parts)
 
 
 def send_line_text(text: str, context: str = "") -> None:
@@ -43,5 +78,5 @@ def send_line_text(text: str, context: str = "") -> None:
     logger.info("Pushed %s to LINE target %s", context or "message", LINE_USER_ID)
 
 
-def send_breakfast(menus: Sequence[GeneratedMenu], template_body: str | None = None) -> None:
-    send_line_text(format_breakfast(menus, template_body), context="breakfast")
+def send_breakfast(menus: Sequence[GeneratedMenu]) -> None:
+    send_line_text(format_breakfast(menus), context="breakfast")

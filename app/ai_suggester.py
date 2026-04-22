@@ -39,6 +39,10 @@ SYSTEM_PROMPT = (
     "・料理の合計カロリーが、指定されたターゲットの許容範囲に収まるようにする\n"
     "・1 献立は 1〜5 品で構成する(素材が乏しいときは少なくてよい)\n"
     "・直近で提供した献立と同じ構成にならないようにする\n"
+    "・**line_text には LINE にそのまま送れる配信用テキストを書く**\n"
+    "  - 絵文字を適度に使って読みやすく\n"
+    "  - プロファイル名 / 献立名 / 各料理 (分量とカロリー) / 使う素材 / 合計カロリー を含める\n"
+    "  - 例: '【700kcal】トースト朝食\\n・トースト(食パン 1枚) 160kcal\\n・ゆで卵(卵 1個) 90kcal\\n合計 250kcal'\n"
     "・すべて日本語で記述する"
 )
 
@@ -51,6 +55,14 @@ MENU_TOOL = {
             "menu_name": {
                 "type": "string",
                 "description": "献立全体の名前(例: しゃけ茶漬け中心の和朝食)",
+            },
+            "line_text": {
+                "type": "string",
+                "description": (
+                    "LINE にそのまま送れる配信用テキスト。"
+                    "プロファイル名・献立名・各料理(分量・カロリー・使う素材)・合計カロリーを含め、"
+                    "絵文字で読みやすく整形する。"
+                ),
             },
             "dishes": {
                 "type": "array",
@@ -88,7 +100,7 @@ MENU_TOOL = {
                 },
             },
         },
-        "required": ["menu_name", "dishes"],
+        "required": ["menu_name", "dishes", "line_text"],
     },
 }
 
@@ -273,6 +285,7 @@ def generate_ai_menu(
         return None
 
     menu_name = str(payload.get("menu_name") or items[0].name).strip()
+    line_text = str(payload.get("line_text") or "").strip()
     total = sum(i.calories for i in items)
     return GeneratedMenu(
         menu_name=menu_name,
@@ -281,6 +294,7 @@ def generate_ai_menu(
         is_fallback=False,
         profile_name=profile.name,
         source="ai",
+        line_text=line_text,
     )
 
 

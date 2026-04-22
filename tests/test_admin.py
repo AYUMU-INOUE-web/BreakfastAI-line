@@ -61,49 +61,12 @@ def test_invalid_category_rejected(client):
     assert res.status_code == 400
 
 
-def test_template_get_returns_default_on_first_access(client):
-    res = client.get("/api/template")
-    assert res.status_code == 200
-    data = res.get_json()
-    assert "きょうの朝ごはん" in data["body"]
-    assert any(v["name"] == "menus" for v in data["variables"])
-
-
-def test_template_update_and_fetch(client):
-    body = "テスト 合計 {{ total_calories_int }} kcal"
-    res = client.put("/api/template", json={"body": body})
-    assert res.status_code == 200
-    assert res.get_json()["body"] == body
-
-    res = client.get("/api/template")
-    assert res.get_json()["body"] == body
-
-
-def test_template_update_rejects_invalid_syntax(client):
-    res = client.put("/api/template", json={"body": "{{ broken("})
-    assert res.status_code == 400
-
-
-def test_template_update_rejects_empty_body(client):
-    res = client.put("/api/template", json={"body": "   "})
-    assert res.status_code == 400
-
-
-def test_template_preview_uses_supplied_body(client):
-    res = client.post(
-        "/api/template/preview",
-        json={"body": "合計 {{ menus[0].total_calories_int }}kcal"},
-    )
-    assert res.status_code == 200
-    assert "合計 494kcal" == res.get_json()["preview"]
-
-
-def test_template_reset_restores_default(client):
-    client.put("/api/template", json={"body": "変更済み"})
-    res = client.post("/api/template/reset")
-    assert res.status_code == 200
-    body = client.get("/api/template").get_json()["body"]
-    assert "きょうの朝ごはん" in body
+def test_breakfast_template_endpoints_are_gone(client):
+    # 朝ごはんはテンプレート編集を廃止しており、どのエンドポイントも 404
+    assert client.get("/api/template").status_code == 404
+    assert client.put("/api/template", json={"body": "x"}).status_code == 404
+    assert client.post("/api/template/reset").status_code == 404
+    assert client.post("/api/template/preview", json={"body": "x"}).status_code == 404
 
 
 @pytest.fixture
