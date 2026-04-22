@@ -114,9 +114,13 @@ def strict_render(body: str, menus: Sequence[GeneratedMenu], today: Optional[dat
 
 
 def get_active_body(session: Session) -> str:
+    # breakfast 用テンプレート。kind=None の既存行も breakfast として扱う
     row = (
         session.query(MessageTemplate)
         .filter(MessageTemplate.is_active.is_(True))
+        .filter(
+            (MessageTemplate.kind == "breakfast") | (MessageTemplate.kind.is_(None))
+        )
         .order_by(MessageTemplate.updated_at.desc())
         .first()
     )
@@ -151,7 +155,14 @@ def sample_menus() -> list[GeneratedMenu]:
 
 
 def ensure_default_template(session: Session) -> None:
-    exists = session.query(MessageTemplate).first()
+    # breakfast 用の既定テンプレートが無ければ投入
+    exists = (
+        session.query(MessageTemplate)
+        .filter(
+            (MessageTemplate.kind == "breakfast") | (MessageTemplate.kind.is_(None))
+        )
+        .first()
+    )
     if exists is not None:
         return
     session.add(
@@ -159,5 +170,6 @@ def ensure_default_template(session: Session) -> None:
             name=DEFAULT_TEMPLATE_NAME,
             body=DEFAULT_TEMPLATE_BODY,
             is_active=True,
+            kind="breakfast",
         )
     )

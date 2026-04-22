@@ -23,12 +23,13 @@ import hmac
 
 from flask import Flask, Response, jsonify, render_template_string, request
 
+from app import cleaning as cleaning_mod
 from app.ai_suggester import is_available as ai_is_available
 from app.config import ADMIN_PASSWORD, AUTO_SEED, CRON_SECRET
 from app.database import init_db, session_scope
 from app.line_notifier import send_breakfast
 from app.menu_generator import generate_breakfast, save_history
-from app.models import Ingredient, MessageTemplate
+from app.models import Cleaner, CleaningLocation, Ingredient, MessageTemplate
 from app.seed_data import seed_default_ingredients
 from app.template_renderer import (
     AVAILABLE_VARIABLES,
@@ -48,6 +49,45 @@ CATEGORY_LABEL = {
     "side": "副菜",
     "drink": "飲み物",
 }
+
+LANDING_HTML = """
+<!doctype html>
+<html lang=\"ja\">
+<head>
+<meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<title>家族の自動化</title>
+<style>
+  body{font-family:system-ui,-apple-system,\"Hiragino Kaku Gothic ProN\",sans-serif;margin:0;background:#fafaf7;color:#222;min-height:100vh;display:flex;flex-direction:column;}
+  header{background:#fff;border-bottom:1px solid #e0ddd5;padding:18px 20px;}
+  header h1{margin:0;font-size:18px;}
+  main{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;width:100%;max-width:720px;}
+  a.card{display:block;background:#fff;border:1px solid #e0ddd5;border-radius:12px;padding:28px 24px;text-decoration:none;color:#222;transition:transform 0.1s, box-shadow 0.1s;}
+  a.card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,0.06);}
+  a.card .emoji{font-size:48px;margin-bottom:8px;}
+  a.card h2{margin:0 0 6px;font-size:18px;}
+  a.card p{margin:0;color:#666;font-size:13px;line-height:1.6;}
+</style>
+</head>
+<body>
+<header><h1>🏠 家族の自動化</h1></header>
+<main>
+  <div class=\"grid\">
+    <a class=\"card\" href=\"/breakfast\">
+      <div class=\"emoji\">🍳</div>
+      <h2>朝ごはん</h2>
+      <p>素材の登録と、毎朝 7:00 の LINE 配信管理</p>
+    </a>
+    <a class=\"card\" href=\"/cleaning\">
+      <div class=\"emoji\">🧹</div>
+      <h2>掃除当番</h2>
+      <p>担当者と場所の登録、毎週土曜 8:00 の割り当て配信</p>
+    </a>
+  </div>
+</main>
+</body></html>
+"""
 
 INDEX_HTML = """
 <!doctype html>
@@ -383,6 +423,347 @@ updateAiBadge();
 """
 
 
+CLEANING_HTML = """
+<!doctype html>
+<html lang=\"ja\">
+<head>
+<meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<title>掃除当番 管理</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#222; --muted:#666; --accent:#5ab0a8; --border:#e0ddd5; }
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,\"Hiragino Kaku Gothic ProN\",sans-serif;margin:0;background:var(--bg);color:var(--fg);}
+  header{background:#fff;border-bottom:1px solid var(--border);padding:16px 20px;display:flex;align-items:center;gap:12px;}
+  header h1{margin:0;font-size:18px;flex:1;}
+  header a{color:var(--muted);text-decoration:none;font-size:13px;}
+  nav{background:#fff;border-bottom:1px solid var(--border);display:flex;}
+  nav button{background:none;border:0;padding:14px 20px;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:3px solid transparent;}
+  nav button.active{color:var(--accent);border-color:var(--accent);font-weight:600;}
+  main{max-width:900px;margin:24px auto;padding:0 16px;}
+  section{display:none;}
+  section.active{display:block;}
+  h2{font-size:16px;margin:24px 0 12px;}
+  .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;}
+  table{width:100%;border-collapse:collapse;background:#fff;}
+  th,td{border-bottom:1px solid var(--border);padding:10px 8px;font-size:13px;text-align:left;}
+  th{background:#f4f2ec;font-weight:600;}
+  tr:last-child td{border-bottom:0;}
+  .row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px;}
+  .row input,.row select,.row textarea{padding:8px;font-size:13px;border:1px solid var(--border);border-radius:4px;}
+  textarea{width:100%;min-height:180px;font-family:\"SF Mono\",Menlo,monospace;font-size:13px;padding:10px;border:1px solid var(--border);border-radius:4px;}
+  button.primary{background:var(--accent);color:#fff;border:0;padding:10px 16px;border-radius:4px;font-size:14px;cursor:pointer;}
+  button.secondary{background:#fff;color:var(--fg);border:1px solid var(--border);padding:10px 16px;border-radius:4px;font-size:14px;cursor:pointer;}
+  button.danger{background:#fff;color:#c43;border:1px solid #f0cfc5;padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;}
+  button.small{padding:4px 10px;font-size:12px;border-radius:4px;cursor:pointer;}
+  button.small.primary{background:var(--accent);color:#fff;border:0;}
+  button.small.secondary{background:#fff;color:var(--fg);border:1px solid var(--border);}
+  button[disabled]{opacity:0.5;cursor:not-allowed;}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+  pre.preview{background:#f4f9f7;border:1px solid var(--border);border-radius:4px;padding:14px;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.7;}
+  .muted{color:var(--muted);font-size:12px;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#e7f0e3;color:#365;}
+  .badge.inactive{background:#eee;color:#888;}
+  .help{background:#f4f9f7;border:1px solid #bde0d8;border-radius:4px;padding:10px 12px;font-size:12px;margin:10px 0;}
+  .help code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:3px;}
+  .loading{display:flex;align-items:center;gap:8px;padding:14px;background:#f4f9f7;border:1px solid #bde0d8;border-radius:4px;font-size:13px;margin-top:12px;}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #eee;border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  td.edit input,td.edit select,td.edit textarea{width:100%;padding:4px;font-size:12px;border:1px solid var(--border);border-radius:3px;box-sizing:border-box;}
+  td.edit textarea{min-height:40px;font-family:inherit;}
+  @media (max-width:640px){ .row{grid-template-columns:repeat(2,1fr);} }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧹 掃除当番 管理</h1>
+  <a href=\"/\">← トップへ</a>
+</header>
+<nav>
+  <button data-tab=\"dashboard\" class=\"active\">ダッシュボード</button>
+  <button data-tab=\"cleaners\">担当者</button>
+  <button data-tab=\"locations\">場所</button>
+  <button data-tab=\"template\">テンプレート</button>
+</nav>
+<main>
+
+<section id=\"sec-dashboard\" class=\"active\">
+  <div class=\"card\">
+    <h2>今週の割り当てプレビュー</h2>
+    <p class=\"muted\">担当者 × 場所をランダムに割り当てます。LINEへは送信されません。</p>
+    <div class=\"actions\">
+      <button class=\"primary\" id=\"btnPreview\" onclick=\"preview()\">プレビュー生成</button>
+      <button class=\"secondary\" id=\"btnSendNow\" onclick=\"sendNow()\">いますぐ LINE 送信</button>
+    </div>
+    <div class=\"loading\" id=\"cleanLoading\" style=\"display:none;\"><span class=\"spinner\"></span><div>生成中...</div></div>
+    <pre class=\"preview\" id=\"dashOut\">(未生成)</pre>
+  </div>
+  <div class=\"card\">
+    <h2>累積ポイント</h2>
+    <table id=\"leaderboard\">
+      <thead><tr><th>順位</th><th>担当者</th><th>累積ポイント</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section id=\"sec-cleaners\">
+  <div class=\"card\">
+    <h2>担当者を追加</h2>
+    <form id=\"addCleaner\">
+      <div class=\"row\" style=\"grid-template-columns:1fr auto;\">
+        <input name=\"name\" placeholder=\"名前\" required>
+        <button type=\"submit\" class=\"primary\">追加</button>
+      </div>
+    </form>
+  </div>
+  <div class=\"card\">
+    <h2>登録済み担当者</h2>
+    <table id=\"cleaners\">
+      <thead><tr><th>名前</th><th>累積ポイント</th><th>状態</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section id=\"sec-locations\">
+  <div class=\"card\">
+    <h2>掃除場所を追加</h2>
+    <form id=\"addLocation\">
+      <div class=\"row\" style=\"grid-template-columns:1fr 80px 1fr auto;\">
+        <input name=\"name\" placeholder=\"掃除の場所 (例: キッチン)\" required>
+        <input name=\"points\" type=\"number\" min=\"0\" placeholder=\"点数\" required>
+        <input name=\"notes\" placeholder=\"備考 / 実施内容\">
+        <button type=\"submit\" class=\"primary\">追加</button>
+      </div>
+    </form>
+  </div>
+  <div class=\"card\">
+    <h2>登録済み掃除場所</h2>
+    <table id=\"locations\">
+      <thead><tr><th>場所</th><th>点数</th><th>実施内容</th><th>状態</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section id=\"sec-template\">
+  <div class=\"card\">
+    <h2>配信テンプレートの編集</h2>
+    <p class=\"muted\">Jinja2 構文で編集できます。<code>assignments</code> は割り当ての配列です。</p>
+    <textarea id=\"tmplBody\"></textarea>
+    <div class=\"actions\">
+      <button class=\"primary\" onclick=\"saveTemplate()\">保存</button>
+      <button class=\"secondary\" onclick=\"previewTemplate()\">プレビュー</button>
+      <button class=\"secondary\" onclick=\"resetTemplate()\">既定に戻す</button>
+    </div>
+    <div class=\"help\">
+      <strong>使える変数</strong>
+      <ul id=\"varList\" style=\"margin:6px 0 0 18px;padding:0;\"></ul>
+    </div>
+  </div>
+  <div class=\"card\">
+    <h2>プレビュー(サンプル割り当てで描画)</h2>
+    <pre class=\"preview\" id=\"tmplOut\">(未プレビュー)</pre>
+  </div>
+</section>
+
+</main>
+<script>
+const tabs = document.querySelectorAll('nav button');
+const sections = document.querySelectorAll('main section');
+tabs.forEach(b => b.onclick = () => {
+  tabs.forEach(x => x.classList.remove('active'));
+  sections.forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  document.getElementById('sec-' + b.dataset.tab).classList.add('active');
+  if(b.dataset.tab === 'template') loadTemplate();
+  if(b.dataset.tab === 'cleaners') loadCleaners();
+  if(b.dataset.tab === 'locations') loadLocations();
+  if(b.dataset.tab === 'dashboard') loadLeaderboard();
+});
+
+function escapeHtml(s){ return String(s).replace(/[&<>\"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\\'':'&#39;' })[c]); }
+
+// ----- Cleaners -----
+async function loadCleaners(){
+  const res = await fetch('/api/cleaners');
+  const data = await res.json();
+  const tbody = document.querySelector('#cleaners tbody');
+  tbody.innerHTML = '';
+  for(const c of data){ tbody.appendChild(renderCleanerView(c)); }
+}
+function renderCleanerView(c){
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${escapeHtml(c.name)}</td>` +
+    `<td>${c.total_points}</td>` +
+    `<td><span class=\"badge ${c.active?'':'inactive'}\">${c.active?'有効':'無効'}</span></td>` +
+    `<td><button class=\"small secondary\" data-act=\"edit\">編集</button> <button class=\"danger\" data-act=\"delete\">削除</button></td>`;
+  tr.querySelector('[data-act=edit]').onclick = () => tr.replaceWith(renderCleanerEdit(c));
+  tr.querySelector('[data-act=delete]').onclick = async () => {
+    if(!confirm(`${c.name} を削除しますか?`)) return;
+    const r = await fetch('/api/cleaners/' + c.id, {method:'DELETE'});
+    if(r.ok) loadCleaners(); else alert('失敗: ' + await r.text());
+  };
+  return tr;
+}
+function renderCleanerEdit(c){
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td class=\"edit\"><input name=\"name\" value=\"${escapeHtml(c.name)}\"></td>
+    <td class=\"edit\"><input name=\"total_points\" type=\"number\" value=\"${c.total_points}\"></td>
+    <td class=\"edit\"><label style=\"font-size:12px;\"><input type=\"checkbox\" name=\"active\" ${c.active?'checked':''}> 有効</label></td>
+    <td><button class=\"small primary\" data-act=\"save\">保存</button> <button class=\"small secondary\" data-act=\"cancel\">取消</button></td>
+  `;
+  tr.querySelector('[data-act=save]').onclick = async () => {
+    const body = {
+      name: tr.querySelector('[name=name]').value.trim(),
+      total_points: Number(tr.querySelector('[name=total_points]').value) || 0,
+      active: tr.querySelector('[name=active]').checked,
+    };
+    const r = await fetch('/api/cleaners/' + c.id, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    if(r.ok) loadCleaners(); else alert('失敗: ' + await r.text());
+  };
+  tr.querySelector('[data-act=cancel]').onclick = () => tr.replaceWith(renderCleanerView(c));
+  return tr;
+}
+document.getElementById('addCleaner').onsubmit = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  const r = await fetch('/api/cleaners', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if(r.ok){ e.target.reset(); loadCleaners(); } else { alert('失敗: ' + await r.text()); }
+};
+
+// ----- Locations -----
+async function loadLocations(){
+  const res = await fetch('/api/cleaning_locations');
+  const data = await res.json();
+  const tbody = document.querySelector('#locations tbody');
+  tbody.innerHTML = '';
+  for(const l of data){ tbody.appendChild(renderLocationView(l)); }
+}
+function renderLocationView(l){
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${escapeHtml(l.name)}</td>` +
+    `<td>${l.points}</td>` +
+    `<td>${escapeHtml(l.notes || '')}</td>` +
+    `<td><span class=\"badge ${l.active?'':'inactive'}\">${l.active?'有効':'無効'}</span></td>` +
+    `<td><button class=\"small secondary\" data-act=\"edit\">編集</button> <button class=\"danger\" data-act=\"delete\">削除</button></td>`;
+  tr.querySelector('[data-act=edit]').onclick = () => tr.replaceWith(renderLocationEdit(l));
+  tr.querySelector('[data-act=delete]').onclick = async () => {
+    if(!confirm(`${l.name} を削除しますか?`)) return;
+    const r = await fetch('/api/cleaning_locations/' + l.id, {method:'DELETE'});
+    if(r.ok) loadLocations(); else alert('失敗: ' + await r.text());
+  };
+  return tr;
+}
+function renderLocationEdit(l){
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td class=\"edit\"><input name=\"name\" value=\"${escapeHtml(l.name)}\"></td>
+    <td class=\"edit\"><input name=\"points\" type=\"number\" min=\"0\" value=\"${l.points}\"></td>
+    <td class=\"edit\"><textarea name=\"notes\">${escapeHtml(l.notes || '')}</textarea></td>
+    <td class=\"edit\"><label style=\"font-size:12px;\"><input type=\"checkbox\" name=\"active\" ${l.active?'checked':''}> 有効</label></td>
+    <td><button class=\"small primary\" data-act=\"save\">保存</button> <button class=\"small secondary\" data-act=\"cancel\">取消</button></td>
+  `;
+  tr.querySelector('[data-act=save]').onclick = async () => {
+    const body = {
+      name: tr.querySelector('[name=name]').value.trim(),
+      points: Number(tr.querySelector('[name=points]').value) || 0,
+      notes: tr.querySelector('[name=notes]').value,
+      active: tr.querySelector('[name=active]').checked,
+    };
+    const r = await fetch('/api/cleaning_locations/' + l.id, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    if(r.ok) loadLocations(); else alert('失敗: ' + await r.text());
+  };
+  tr.querySelector('[data-act=cancel]').onclick = () => tr.replaceWith(renderLocationView(l));
+  return tr;
+}
+document.getElementById('addLocation').onsubmit = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  body.points = Number(body.points);
+  const r = await fetch('/api/cleaning_locations', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if(r.ok){ e.target.reset(); loadLocations(); } else { alert('失敗: ' + await r.text()); }
+};
+
+// ----- Template -----
+async function loadTemplate(){
+  const res = await fetch('/api/cleaning_template');
+  const data = await res.json();
+  document.getElementById('tmplBody').value = data.body;
+  const ul = document.getElementById('varList');
+  ul.innerHTML = '';
+  for(const v of data.variables){
+    const li = document.createElement('li');
+    li.innerHTML = `<code>${escapeHtml(v.name)}</code> — ${escapeHtml(v.description)}`;
+    ul.appendChild(li);
+  }
+}
+async function saveTemplate(){
+  const body = document.getElementById('tmplBody').value;
+  const res = await fetch('/api/cleaning_template', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({body})});
+  if(res.ok){ await previewTemplate(); alert('保存しました'); } else { alert('失敗: ' + await res.text()); }
+}
+async function previewTemplate(){
+  const body = document.getElementById('tmplBody').value;
+  const res = await fetch('/api/cleaning_template/preview', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({body})});
+  const data = await res.json();
+  document.getElementById('tmplOut').textContent = data.preview;
+}
+async function resetTemplate(){
+  if(!confirm('テンプレートを既定に戻しますか?')) return;
+  const res = await fetch('/api/cleaning_template/reset', {method:'POST'});
+  if(res.ok){ loadTemplate(); }
+}
+
+// ----- Dashboard -----
+function _setBusy(busy){
+  const loading = document.getElementById('cleanLoading');
+  const btns = [document.getElementById('btnPreview'), document.getElementById('btnSendNow')];
+  btns.forEach(b => { if(b) b.disabled = busy; });
+  loading.style.display = busy ? 'flex' : 'none';
+}
+async function preview(){
+  _setBusy(true);
+  try {
+    const res = await fetch('/api/cleaning_preview', {method:'POST'});
+    if(!res.ok){ document.getElementById('dashOut').textContent = '失敗: ' + await res.text(); return; }
+    const data = await res.json();
+    document.getElementById('dashOut').textContent = data.rendered + '\\n\\n― 割り当て ―\\n' + JSON.stringify(data.assignments, null, 2);
+  } finally { _setBusy(false); }
+}
+async function sendNow(){
+  if(!confirm('LINEへ即時送信します。よろしいですか?')) return;
+  _setBusy(true);
+  try {
+    const res = await fetch('/api/cleaning_send_now', {method:'POST'});
+    if(!res.ok){ document.getElementById('dashOut').textContent = '失敗: ' + await res.text(); return; }
+    const data = await res.json();
+    document.getElementById('dashOut').textContent = data.rendered + '\\n\\n(送信しました。ポイントも加算されました)';
+    loadLeaderboard();
+  } finally { _setBusy(false); }
+}
+async function loadLeaderboard(){
+  const res = await fetch('/api/cleaners');
+  const data = await res.json();
+  data.sort((a, b) => b.total_points - a.total_points);
+  const tbody = document.querySelector('#leaderboard tbody');
+  tbody.innerHTML = '';
+  data.forEach((c, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${i + 1}</td><td>${escapeHtml(c.name)}</td><td>${c.total_points} pt</td>`;
+    tbody.appendChild(tr);
+  });
+}
+loadLeaderboard();
+</script>
+</body></html>
+"""
+
+
 def _validate_payload(payload: dict) -> tuple[dict, str | None]:
     required = [
         "name",
@@ -416,16 +797,11 @@ def _validate_payload(payload: dict) -> tuple[dict, str | None]:
 
 
 def _bootstrap_db() -> None:
-    """初回起動(or コールドスタート)時の自動初期化。
-
-    - テーブル作成
-    - デフォルトテンプレート投入
-    - AUTO_SEED=1 かつ食材 0 件なら seed_default_ingredients を実行
-    全て冪等。既に入っているデータは上書きしない。
-    """
+    """初回起動(or コールドスタート)時の自動初期化。"""
     init_db()
     with session_scope() as s:
         ensure_default_template(s)
+        cleaning_mod.ensure_default_cleaning_template(s)
     if AUTO_SEED:
         with session_scope() as s:
             if s.query(Ingredient).count() == 0:
@@ -454,7 +830,15 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
+        return render_template_string(LANDING_HTML)
+
+    @app.get("/breakfast")
+    def breakfast_index():
         return render_template_string(INDEX_HTML)
+
+    @app.get("/cleaning")
+    def cleaning_index():
+        return render_template_string(CLEANING_HTML)
 
     # ---- ingredients ----
     @app.get("/api/ingredients")
@@ -586,7 +970,237 @@ def create_app() -> Flask:
     def ai_status():
         return jsonify({"available": ai_is_available()})
 
-    # ---- Vercel Cron からの定時配信 ----
+    # ==========================================================
+    # 掃除当番機能
+    # ==========================================================
+
+    # ---- Cleaner CRUD ----
+    def _validate_cleaner(payload: dict, require_name: bool = True) -> tuple[dict, str | None]:
+        if not isinstance(payload, dict):
+            return {}, "invalid payload"
+        cleaned = {}
+        if "name" in payload or require_name:
+            name = str(payload.get("name") or "").strip()
+            if not name:
+                return {}, "name is required"
+            cleaned["name"] = name
+        if "total_points" in payload:
+            try:
+                cleaned["total_points"] = int(payload["total_points"])
+            except (TypeError, ValueError):
+                return {}, "total_points must be integer"
+        if "active" in payload:
+            cleaned["active"] = bool(payload["active"])
+        return cleaned, None
+
+    @app.get("/api/cleaners")
+    def list_cleaners():
+        with session_scope() as s:
+            rows = s.query(Cleaner).order_by(Cleaner.id).all()
+            return jsonify([r.to_dict() for r in rows])
+
+    @app.post("/api/cleaners")
+    def create_cleaner():
+        cleaned, err = _validate_cleaner(request.get_json(force=True))
+        if err:
+            return err, 400
+        with session_scope() as s:
+            cleaner = Cleaner(**cleaned)
+            s.add(cleaner)
+            s.flush()
+            return jsonify(cleaner.to_dict()), 201
+
+    @app.put("/api/cleaners/<int:cleaner_id>")
+    def update_cleaner(cleaner_id: int):
+        cleaned, err = _validate_cleaner(request.get_json(force=True), require_name=False)
+        if err:
+            return err, 400
+        with session_scope() as s:
+            cleaner = s.get(Cleaner, cleaner_id)
+            if cleaner is None:
+                return "not found", 404
+            for k, v in cleaned.items():
+                setattr(cleaner, k, v)
+            s.flush()
+            return jsonify(cleaner.to_dict())
+
+    @app.delete("/api/cleaners/<int:cleaner_id>")
+    def delete_cleaner(cleaner_id: int):
+        with session_scope() as s:
+            cleaner = s.get(Cleaner, cleaner_id)
+            if cleaner is None:
+                return "not found", 404
+            s.delete(cleaner)
+        return "", 204
+
+    # ---- CleaningLocation CRUD ----
+    def _validate_location(payload: dict, require_all: bool = True) -> tuple[dict, str | None]:
+        if not isinstance(payload, dict):
+            return {}, "invalid payload"
+        cleaned = {}
+        if "name" in payload or require_all:
+            name = str(payload.get("name") or "").strip()
+            if not name:
+                return {}, "name is required"
+            cleaned["name"] = name
+        if "points" in payload or require_all:
+            try:
+                points = int(payload.get("points", 0))
+            except (TypeError, ValueError):
+                return {}, "points must be integer"
+            if points < 0:
+                return {}, "points must be >= 0"
+            cleaned["points"] = points
+        if "notes" in payload or require_all:
+            cleaned["notes"] = str(payload.get("notes") or "").strip()
+        if "active" in payload:
+            cleaned["active"] = bool(payload["active"])
+        return cleaned, None
+
+    @app.get("/api/cleaning_locations")
+    def list_locations():
+        with session_scope() as s:
+            rows = s.query(CleaningLocation).order_by(CleaningLocation.id).all()
+            return jsonify([r.to_dict() for r in rows])
+
+    @app.post("/api/cleaning_locations")
+    def create_location():
+        cleaned, err = _validate_location(request.get_json(force=True))
+        if err:
+            return err, 400
+        with session_scope() as s:
+            loc = CleaningLocation(**cleaned)
+            s.add(loc)
+            s.flush()
+            return jsonify(loc.to_dict()), 201
+
+    @app.put("/api/cleaning_locations/<int:location_id>")
+    def update_location(location_id: int):
+        cleaned, err = _validate_location(request.get_json(force=True), require_all=False)
+        if err:
+            return err, 400
+        with session_scope() as s:
+            loc = s.get(CleaningLocation, location_id)
+            if loc is None:
+                return "not found", 404
+            for k, v in cleaned.items():
+                setattr(loc, k, v)
+            s.flush()
+            return jsonify(loc.to_dict())
+
+    @app.delete("/api/cleaning_locations/<int:location_id>")
+    def delete_location(location_id: int):
+        with session_scope() as s:
+            loc = s.get(CleaningLocation, location_id)
+            if loc is None:
+                return "not found", 404
+            s.delete(loc)
+        return "", 204
+
+    # ---- 掃除テンプレート ----
+    @app.get("/api/cleaning_template")
+    def get_cleaning_template():
+        with session_scope() as s:
+            body = cleaning_mod.get_active_cleaning_body(s)
+        return jsonify(
+            {
+                "body": body,
+                "variables": [
+                    {"name": n, "description": d}
+                    for n, d in cleaning_mod.AVAILABLE_VARIABLES
+                ],
+            }
+        )
+
+    @app.put("/api/cleaning_template")
+    def update_cleaning_template():
+        payload = request.get_json(force=True) or {}
+        body = payload.get("body")
+        if not isinstance(body, str) or not body.strip():
+            return "body must be a non-empty string", 400
+        try:
+            cleaning_mod.strict_render(body, cleaning_mod.sample_assignments())
+        except Exception as exc:  # noqa: BLE001
+            return f"template render failed: {exc}", 400
+        with session_scope() as s:
+            active = (
+                s.query(MessageTemplate)
+                .filter(MessageTemplate.kind == "cleaning")
+                .filter(MessageTemplate.is_active.is_(True))
+                .first()
+            )
+            if active is None:
+                active = MessageTemplate(
+                    name=cleaning_mod.DEFAULT_CLEANING_TEMPLATE_NAME,
+                    body=body,
+                    is_active=True,
+                    kind="cleaning",
+                )
+                s.add(active)
+            else:
+                active.body = body
+            s.flush()
+            return jsonify(active.to_dict())
+
+    @app.post("/api/cleaning_template/reset")
+    def reset_cleaning_template():
+        with session_scope() as s:
+            active = (
+                s.query(MessageTemplate)
+                .filter(MessageTemplate.kind == "cleaning")
+                .filter(MessageTemplate.is_active.is_(True))
+                .first()
+            )
+            if active is None:
+                active = MessageTemplate(
+                    name=cleaning_mod.DEFAULT_CLEANING_TEMPLATE_NAME,
+                    body=cleaning_mod.DEFAULT_CLEANING_TEMPLATE_BODY,
+                    is_active=True,
+                    kind="cleaning",
+                )
+                s.add(active)
+            else:
+                active.body = cleaning_mod.DEFAULT_CLEANING_TEMPLATE_BODY
+            s.flush()
+            return jsonify(active.to_dict())
+
+    @app.post("/api/cleaning_template/preview")
+    def preview_cleaning_template():
+        payload = request.get_json(force=True) or {}
+        body = payload.get("body") or cleaning_mod.DEFAULT_CLEANING_TEMPLATE_BODY
+        try:
+            rendered = cleaning_mod.strict_render(body, cleaning_mod.sample_assignments())
+        except Exception as exc:  # noqa: BLE001
+            return f"render failed: {exc}", 400
+        return jsonify({"preview": rendered})
+
+    # ---- 掃除 割り当てプレビュー / 即時送信 ----
+    @app.post("/api/cleaning_preview")
+    def cleaning_preview():
+        with session_scope() as s:
+            assignments = cleaning_mod.generate_assignments(s)
+            body = cleaning_mod.get_active_cleaning_body(s)
+        return jsonify({
+            "assignments": [a.to_payload() for a in assignments],
+            "rendered": cleaning_mod.render(body, assignments),
+        })
+
+    @app.post("/api/cleaning_send_now")
+    def cleaning_send_now():
+        with session_scope() as s:
+            assignments = cleaning_mod.generate_assignments(s)
+            if assignments:
+                cleaning_mod.save_history_and_update_points(s, assignments)
+            body = cleaning_mod.get_active_cleaning_body(s)
+        text = cleaning_mod.send_cleaning(assignments, template_body=body) if assignments else ""
+        return jsonify({
+            "assignments": [a.to_payload() for a in assignments],
+            "rendered": text or cleaning_mod.render(body, assignments),
+        })
+
+    # ==========================================================
+    # Vercel Cron からの定時配信
+    # ==========================================================
     @app.route("/api/cron/send", methods=["GET", "POST"])
     def cron_send():
         if CRON_SECRET:
@@ -607,6 +1221,25 @@ def create_app() -> Flask:
                 "total_calories": m.total_calories,
                 "is_fallback": m.is_fallback,
             } for m in menus],
+        })
+
+    @app.route("/api/cron/cleaning", methods=["GET", "POST"])
+    def cron_cleaning():
+        if CRON_SECRET:
+            auth = request.headers.get("Authorization", "")
+            expected = f"Bearer {CRON_SECRET}"
+            if not hmac.compare_digest(auth, expected):
+                return "unauthorized", 401
+        with session_scope() as s:
+            assignments = cleaning_mod.generate_assignments(s)
+            if assignments:
+                cleaning_mod.save_history_and_update_points(s, assignments)
+            body = cleaning_mod.get_active_cleaning_body(s)
+        if assignments:
+            cleaning_mod.send_cleaning(assignments, template_body=body)
+        return jsonify({
+            "sent": bool(assignments),
+            "assignments": [a.to_payload() for a in assignments],
         })
 
     return app

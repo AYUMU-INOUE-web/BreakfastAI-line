@@ -34,15 +34,26 @@ def _apply_simple_migrations() -> None:
     """Alembic を使わない軽量な列追加マイグレーション。冪等。"""
     try:
         inspector = inspect(_engine)
-        if "menu_history" not in inspector.get_table_names():
-            return
-        cols = {c["name"] for c in inspector.get_columns("menu_history")}
-        if "profile_name" not in cols:
-            with _engine.begin() as conn:
-                conn.execute(text(
-                    "ALTER TABLE menu_history ADD COLUMN profile_name VARCHAR(64)"
-                ))
-            logger.info("Added profile_name column to menu_history")
+        names = inspector.get_table_names()
+        if "menu_history" in names:
+            cols = {c["name"] for c in inspector.get_columns("menu_history")}
+            if "profile_name" not in cols:
+                with _engine.begin() as conn:
+                    conn.execute(text(
+                        "ALTER TABLE menu_history ADD COLUMN profile_name VARCHAR(64)"
+                    ))
+                logger.info("Added profile_name column to menu_history")
+        if "message_templates" in names:
+            cols = {c["name"] for c in inspector.get_columns("message_templates")}
+            if "kind" not in cols:
+                with _engine.begin() as conn:
+                    conn.execute(text(
+                        "ALTER TABLE message_templates ADD COLUMN kind VARCHAR(32)"
+                    ))
+                    conn.execute(text(
+                        "UPDATE message_templates SET kind = 'breakfast' WHERE kind IS NULL"
+                    ))
+                logger.info("Added kind column to message_templates")
     except Exception:
         logger.exception("Simple migration failed; continuing")
 

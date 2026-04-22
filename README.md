@@ -1,6 +1,11 @@
-# 朝ごはん献立 LINE 配信アプリ
+# 家族の自動化アプリ(朝ごはん + 掃除当番)
 
-登録した食材から毎朝 7:00 に合計 **700kcal 前後** の朝食献立を自動生成し、LINE で通知する Python アプリ。
+同じドメイン上で 2 つのミニアプリを運用する Python アプリ。
+
+- **🍳 朝ごはん**: 登録した素材から AI(Claude)が毎朝 7:00 に合計 **700kcal / 300kcal 前後** の朝食献立を生成し、LINE で通知
+- **🧹 掃除当番**: 登録した担当者と掃除場所を、毎週土曜 8:00 にランダム割り当てて LINE 通知。場所の点数が担当者ごとに累積
+
+ルートページ `/` は 2 つのアプリへの入口。それぞれ `/breakfast` と `/cleaning` で管理できる。
 
 ## 特徴
 
@@ -20,15 +25,17 @@
 ├── api/
 │   └── index.py              # Vercel Serverless 関数エントリ
 ├── app/
-│   ├── admin.py              # 管理用 Flask Web アプリ + REST API
+│   ├── admin.py              # 管理用 Flask Web アプリ + REST API(朝ごはん / 掃除 両方)
+│   ├── ai_suggester.py       # Claude による朝食献立生成
+│   ├── cleaning.py           # 掃除当番のロジック / テンプレート
 │   ├── config.py             # 環境変数読み込み
-│   ├── database.py           # SQLAlchemy(SQLite / Postgres)
+│   ├── database.py           # SQLAlchemy(SQLite / Postgres)+ 軽量マイグレーション
 │   ├── line_notifier.py      # LINE Messaging API 連携
-│   ├── menu_generator.py     # 献立生成ロジック
-│   ├── models.py             # Ingredient / MenuHistory / MessageTemplate
+│   ├── menu_generator.py     # 朝食献立生成(AI → ルールベース)
+│   ├── models.py             # Ingredient / MenuHistory / MessageTemplate / Cleaner / CleaningLocation / CleaningHistory
 │   ├── scheduler.py          # APScheduler(ローカル/VPS 運用用)
 │   ├── seed_data.py          # サンプル食材
-│   └── template_renderer.py  # Jinja2 テンプレート描画
+│   └── template_renderer.py  # Jinja2 テンプレート描画(朝ごはん用)
 ├── tests/                    # pytest
 ├── main.py                   # ローカル/CI 用エントリ (serve/send-now/seed)
 ├── vercel.json               # Vercel ルーティング + Cron 設定
@@ -55,11 +62,11 @@ python main.py seed        # サンプル食材を投入
 python main.py serve
 ```
 
-- `http://localhost:5000/` … Web 管理アプリ(3タブ)
-  - **ダッシュボード**: 献立プレビュー / LINE 即時送信
-  - **食材**: 追加 / 削除 / 一覧
-  - **テンプレート**: 配信文面編集 + リアルタイムプレビュー
-- 毎朝 7:00(`TIMEZONE` / `NOTIFY_HOUR` で変更可)に LINE 配信
+- `http://localhost:5000/` … トップページ(朝ごはん / 掃除の 2 入口)
+- `http://localhost:5000/breakfast` … 朝ごはん管理(3 タブ: ダッシュボード / 食材 / テンプレート)
+- `http://localhost:5000/cleaning` … 掃除当番管理(4 タブ: ダッシュボード / 担当者 / 場所 / テンプレート)
+- 毎朝 7:00(`NOTIFY_HOUR` で変更可)に朝ごはん LINE 配信
+- 毎週土曜 8:00(Vercel Cron)に掃除当番 LINE 配信
 
 ### 2. cron / systemd タイマーから単発実行
 
@@ -142,16 +149,20 @@ curl -X POST http://localhost:5000/api/ingredients \
 - `ADMIN_PASSWORD` を設定している場合は、ID は任意 / パスワードは設定値
 - 編集内容は Postgres に即時保存され、全員に反映される
 
-### 5. 毎朝 7:00 JST 配信(Vercel Cron)
+### 5. 定時配信(Vercel Cron)
 
-`vercel.json` に組み込み済み。Hobby プランでも無料で稼働。
+`vercel.json` に 2 つの Cron を組み込み済み。Hobby プランでも無料で稼働。
 
 ```json
-"crons": [{ "path": "/api/cron/send", "schedule": "0 22 * * *" }]
+"crons": [
+  { "path": "/api/cron/send",      "schedule": "0 22 * * *" },  // 毎朝 7:00 JST 朝食
+  { "path": "/api/cron/cleaning",  "schedule": "0 23 * * 5" }   // 毎週土曜 8:00 JST 掃除
+]
 ```
 
-- UTC 22:00 = JST 翌 07:00
-- Vercel Cron は自動で Bearer トークン(Vercel が設定する `CRON_SECRET`)を付けて叩く
+- UTC 22:00 = JST 翌 07:00(朝食)
+- 金曜 UTC 23:00 = 土曜 JST 08:00(掃除)
+- Vercel Cron は自動で Bearer トークン(`CRON_SECRET`)を付けて叩く
 - 手動でも叩ける: `curl -H "Authorization: Bearer <CRON_SECRET>" https://xxxxx.vercel.app/api/cron/send`
 
 ### 6. 動作確認チェックリスト
@@ -240,6 +251,59 @@ Vercel Cron が定時配信を引き受けるので、以下のワークフロ�
 {%- endfor %}
 今日も一日がんばろう!
 ```
+
+## 掃除当番機能
+
+`/cleaning` で管理する独立したミニアプリ。朝ごはんとは DB テーブル・テンプレートが別。
+
+### データ
+
+- **担当者(`cleaners`)**: `name`(名前のみ)/ `total_points`(累積ポイント)/ `active`
+- **掃除場所(`cleaning_locations`)**: `name`(場所)/ `points`(点数)/ `notes`(備考・実施内容)/ `active`
+- **履歴(`cleaning_history`)**: 割り当ての記録(担当者・場所・点数・日付)
+
+### 配信ロジック(毎週土曜 08:00 JST)
+
+1. 有効な担当者と掃除場所をそれぞれ取得
+2. どちらかが 0 件ならスキップ(送信しない)
+3. 場所と担当者をシャッフルし、順番にペアリング
+   - 場所 ≥ 担当者 → 各担当者に **異なる場所** が割り当たる
+   - 担当者 > 場所 → 場所を循環利用(同じ場所が複数人に)
+4. 各担当者の `total_points` に割り当たった場所の `points` を加算
+5. LINE にテンプレート経由で送信
+
+### 配信文例(既定テンプレート)
+
+```
+🧹 今週の掃除当番 (2026-04-25)
+
+━━━━━━━━━━━━━
+【太郎】
+📍 キッチン (3pt)
+やること: コンロまわりとシンクを磨く
+
+━━━━━━━━━━━━━
+【花子】
+📍 お風呂 (5pt)
+やること: 浴槽と床、排水口まで
+
+今週もよろしくお願いします!
+```
+
+### 累積ポイント
+
+`/cleaning` のダッシュボードに順位表(累積ポイント降順)が出る。担当者タブで手動修正も可能。
+
+### テンプレート変数
+
+| 変数 | 説明 |
+| --- | --- |
+| `date` | 配信日 `YYYY-MM-DD` |
+| `assignments` | 割り当てリスト |
+| `assignments[i].cleaner_name` | 担当者の名前 |
+| `assignments[i].location_name` | 掃除場所の名前 |
+| `assignments[i].points` | その場所の点数 |
+| `assignments[i].notes` | その場所の備考(実施内容) |
 
 ## 献立生成アルゴリズム(概要)
 

@@ -24,11 +24,11 @@ def format_breakfast(menus: Sequence[GeneratedMenu], template_body: str | None =
     return render(body, menus)
 
 
-def send_breakfast(menus: Sequence[GeneratedMenu], template_body: str | None = None) -> None:
-    text = format_breakfast(menus, template_body)
+def send_line_text(text: str, context: str = "") -> None:
+    """プッシュ通知の汎用関数。宛先は LINE_USER_ID 固定。"""
     if not LINE_CHANNEL_ACCESS_TOKEN or not LINE_USER_ID:
         logger.warning("LINE credentials are not configured; skipping push.")
-        logger.info("Would have sent:\n%s", text)
+        logger.info("Would have sent (%s):\n%s", context or "line", text)
         return
 
     config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
@@ -40,4 +40,8 @@ def send_breakfast(menus: Sequence[GeneratedMenu], template_body: str | None = N
                 messages=[TextMessage(text=text)],
             )
         )
-    logger.info("Pushed today's menu to LINE target %s", LINE_USER_ID)
+    logger.info("Pushed %s to LINE target %s", context or "message", LINE_USER_ID)
+
+
+def send_breakfast(menus: Sequence[GeneratedMenu], template_body: str | None = None) -> None:
+    send_line_text(format_breakfast(menus, template_body), context="breakfast")
