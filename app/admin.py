@@ -104,7 +104,8 @@ INDEX_HTML = """
   header .avatar.no-image::after{content:\"👩🏻\";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:24px;}
   header h1{margin:0;font-size:16px;flex:1;}
   header h1 .ai{color:var(--accent);font-weight:700;}
-  header a.home{color:var(--muted);text-decoration:none;font-size:13px;}
+  header a.home{display:inline-flex;align-items:center;gap:4px;padding:8px 14px;border-radius:999px;background:var(--accent-soft);color:var(--accent);text-decoration:none;font-size:13px;font-weight:600;border:1px solid #f4c0d2;white-space:nowrap;}
+  header a.home:hover{background:var(--accent);color:#fff;}
   nav{background:#fff;border-bottom:1px solid var(--border);display:flex;}
   nav button{background:none;border:0;padding:14px 20px;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:3px solid transparent;}
   nav button.active{color:var(--accent);border-color:var(--accent);font-weight:600;}
@@ -151,7 +152,7 @@ INDEX_HTML = """
 <header>
   <div class=\"avatar\" id=\"hAvatar\"><img src=\"/static/ai-okan.png\" alt=\"AIオカン\" onerror=\"document.getElementById('hAvatar').classList.add('no-image');this.style.display='none';\"></div>
   <h1><span class=\"ai\">AI</span>オカンの朝ごはん 🍳</h1>
-  <a class=\"home\" href=\"/\">← トップ</a>
+  <a class=\"home\" href=\"/\">🏠 トップ</a>
 </header>
 <nav>
   <button data-tab=\"dashboard\" class=\"active\">ダッシュボード</button>
@@ -211,6 +212,10 @@ INDEX_HTML = """
     </table>
   </div>
 </section>
+
+<div style=\"text-align:center;margin:32px 0 8px;\">
+  <a href=\"/\" style=\"display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border-radius:999px;background:#fff;border:1px solid var(--border);color:var(--fg);text-decoration:none;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.04);\">🏠 トップに戻る</a>
+</div>
 
 </main>
 <script>
@@ -396,7 +401,8 @@ CLEANING_HTML = """
   header .avatar.no-image::after{content:\"👩🏻\";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:24px;}
   header h1{margin:0;font-size:16px;flex:1;}
   header h1 .ai{color:var(--pink);font-weight:700;}
-  header a{color:var(--muted);text-decoration:none;font-size:13px;}
+  header a.home{display:inline-flex;align-items:center;gap:4px;padding:8px 14px;border-radius:999px;background:var(--accent-soft);color:var(--accent);text-decoration:none;font-size:13px;font-weight:600;border:1px solid #d4c0e8;white-space:nowrap;}
+  header a.home:hover{background:var(--accent);color:#fff;}
   nav{background:#fff;border-bottom:1px solid var(--border);display:flex;}
   nav button{background:none;border:0;padding:14px 20px;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:3px solid transparent;}
   nav button.active{color:var(--accent);border-color:var(--accent);font-weight:600;}
@@ -438,7 +444,7 @@ CLEANING_HTML = """
 <header>
   <div class=\"avatar\" id=\"hAvatar\"><img src=\"/static/ai-okan.png\" alt=\"AIオカン\" onerror=\"document.getElementById('hAvatar').classList.add('no-image');this.style.display='none';\"></div>
   <h1><span class=\"ai\">AI</span>オカンの掃除当番 🧹</h1>
-  <a href=\"/\">← トップ</a>
+  <a class=\"home\" href=\"/\">🏠 トップ</a>
 </header>
 <nav>
   <button data-tab=\"dashboard\" class=\"active\">ダッシュボード</button>
@@ -528,6 +534,10 @@ CLEANING_HTML = """
     <pre class=\"preview\" id=\"tmplOut\">(未プレビュー)</pre>
   </div>
 </section>
+
+<div style=\"text-align:center;margin:32px 0 8px;\">
+  <a href=\"/\" style=\"display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border-radius:999px;background:#fff;border:1px solid var(--border);color:var(--fg);text-decoration:none;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.04);\">🏠 トップに戻る</a>
+</div>
 
 </main>
 <script>
