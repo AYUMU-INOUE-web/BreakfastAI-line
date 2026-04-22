@@ -191,6 +191,74 @@ def test_generate_ai_menu_returns_none_if_all_dishes_have_unregistered(ai_sessio
     assert menu is None
 
 
+def test_line_text_literal_escape_is_unescaped(ai_session):
+    """Claude が line_text に `\\n` をリテラル文字列で含めたら実改行に変換される。"""
+    session, ai_suggester = ai_session
+    dishes = [{
+        "name": "納豆ごはん",
+        "portion": 1, "unit": "杯", "calories": 250,
+        "ingredients_used": [{"name": "ごはん", "portion": 150, "unit": "g"}],
+        "description": "",
+    }]
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            block = SimpleNamespace(
+                type="tool_use",
+                name="submit_menu",
+                input={
+                    "menu_name": "test",
+                    "dishes": dishes,
+                    "line_text": "【700kcal】朝食\\n・納豆ごはん 1杯 250kcal\\n合計 250kcal",
+                },
+                id="toolu_1",
+            )
+            return SimpleNamespace(content=[block], stop_reason="tool_use")
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            self.messages = FakeMessages()
+
+    with patch.object(ai_suggester.anthropic, "Anthropic", FakeClient):
+        menu = ai_suggester.generate_ai_menu(session, DEFAULT_PROFILES[0])
+
+    assert menu is not None
+    assert "\\n" not in menu.line_text
+    assert menu.line_text.count("\n") == 2
+
+
+def test_line_text_with_real_newlines_is_preserved(ai_session):
+    session, ai_suggester = ai_session
+    dishes = [{
+        "name": "ゆで卵", "portion": 1, "unit": "個", "calories": 80,
+        "ingredients_used": [{"name": "卵", "portion": 1, "unit": "個"}],
+        "description": "",
+    }]
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            block = SimpleNamespace(
+                type="tool_use",
+                name="submit_menu",
+                input={
+                    "menu_name": "test",
+                    "dishes": dishes,
+                    "line_text": "【700kcal】朝食\n・ゆで卵 1個 80kcal",
+                },
+                id="toolu_1",
+            )
+            return SimpleNamespace(content=[block], stop_reason="tool_use")
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            self.messages = FakeMessages()
+
+    with patch.object(ai_suggester.anthropic, "Anthropic", FakeClient):
+        menu = ai_suggester.generate_ai_menu(session, DEFAULT_PROFILES[0])
+
+    assert menu.line_text.count("\n") == 1
+
+
 def test_generate_ai_menu_handles_api_error(ai_session):
     session, ai_suggester = ai_session
 

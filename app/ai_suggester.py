@@ -42,7 +42,10 @@ SYSTEM_PROMPT = (
     "・**line_text には LINE にそのまま送れる配信用テキストを書く**\n"
     "  - 絵文字を適度に使って読みやすく\n"
     "  - プロファイル名 / 献立名 / 各料理 (分量とカロリー) / 使う素材 / 合計カロリー を含める\n"
-    "  - 例: '【700kcal】トースト朝食\\n・トースト(食パン 1枚) 160kcal\\n・ゆで卵(卵 1個) 90kcal\\n合計 250kcal'\n"
+    "  - **改行は実際の改行文字(=JSON上の \\\" 内で実際に行を分ける)を使うこと。**\n"
+    "    バックスラッシュ付きの `\\n` 文字列を本文中に書かない。\n"
+    "    例(OK): 【700kcal】トースト朝食 <実改行> ・トースト 1枚 160kcal\n"
+    "    例(NG): 【700kcal】トースト朝食\\n・トースト 1枚 160kcal\n"
     "・すべて日本語で記述する"
 )
 
@@ -111,6 +114,21 @@ class AISuggesterUnavailableError(RuntimeError):
 
 def is_available() -> bool:
     return bool(ANTHROPIC_API_KEY)
+
+
+def _normalize_line_text(value) -> str:
+    """Claude が稀に line_text にバックスラッシュ付きエスケープ(`\\n` など)を
+    リテラル文字で含めてくることがあるので、実際の制御文字に置き換える。
+    既に実改行だけが含まれている場合は何も変わらない。
+    """
+    if value is None:
+        return ""
+    text = str(value)
+    # \r\n → \n の順で、長いものから置換
+    for escaped, actual in (("\\r\\n", "\n"), ("\\n", "\n"), ("\\t", "\t")):
+        if escaped in text:
+            text = text.replace(escaped, actual)
+    return text.strip()
 
 
 def _format_ingredients(ingredients: Sequence[Ingredient]) -> str:
@@ -285,7 +303,7 @@ def generate_ai_menu(
         return None
 
     menu_name = str(payload.get("menu_name") or items[0].name).strip()
-    line_text = str(payload.get("line_text") or "").strip()
+    line_text = _normalize_line_text(payload.get("line_text"))
     total = sum(i.calories for i in items)
     return GeneratedMenu(
         menu_name=menu_name,
